@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "libremaps"
 include(":app")
+include(":server")
