@@ -85,7 +85,13 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
             else Text(if (isRegister) "Registar" else "Entrar")
         }
 
-        TextButton(onClick = { isRegister = !isRegister }) {
+        TextButton(
+            onClick = {
+                isRegister = !isRegister
+                email = ""
+                password = ""
+            }
+        ) {
             Text(if (isRegister) "Já tenho conta" else "Criar conta")
         }
     }
