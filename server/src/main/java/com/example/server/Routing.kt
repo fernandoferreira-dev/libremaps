@@ -66,13 +66,9 @@ fun Application.configureRouting() {
                     }
                 }
 
-                val passwordValid = if (hash != null) {
-                    try {
-                        BCrypt.checkpw(req.password, hash)
-                    } catch (e: Exception) {
-                        false
-                    }
-                } else {
+                val passwordValid = hash != null && try {
+                    BCrypt.checkpw(req.password, hash)
+                } catch (_: Exception) {
                     false
                 }
 
@@ -84,7 +80,7 @@ fun Application.configureRouting() {
             } catch (e: Exception) {
                 call.respond(
                     HttpStatusCode.InternalServerError,
-                    AuthResponse(false, "Erro no servidor ao iniciar sessão")
+                    AuthResponse(false, "Erro no servidor ao iniciar sessão: ${e.message}")
                 )
             }
         }

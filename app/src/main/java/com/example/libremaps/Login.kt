@@ -22,6 +22,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.LocationOn
@@ -72,6 +73,16 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
 
     LaunchedEffect(state.loggedIn) {
         if (state.loggedIn) onLoggedIn()
+    }
+
+    LaunchedEffect(state.registered) {
+        if (state.registered) {
+            isRegister = false
+            email = ""
+            password = ""
+            passwordVisible = false
+            vm.consumeRegistration()
+        }
     }
 
     Box(
@@ -219,6 +230,40 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    // Alerta de Sucesso
+                    AnimatedVisibility(
+                        visible = state.successMessage != null,
+                        enter = fadeIn(),
+                        exit = fadeOut()
+                    ) {
+                        state.successMessage?.let { msg ->
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 16.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = "Sucesso",
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = msg,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     // Alerta de Erro
                     AnimatedVisibility(
                         visible = state.error != null,
@@ -291,7 +336,10 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
 
             // Alternar entre Login e Registo
             TextButton(
-                onClick = { isRegister = !isRegister },
+                onClick = {
+                    vm.clearError()
+                    isRegister = !isRegister
+                },
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text(
