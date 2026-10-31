@@ -5,33 +5,14 @@ import android.content.Intent
 import android.location.Location
 import android.net.Uri
 import android.provider.Settings
-import android.view.MotionEvent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material3.Button
-import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -39,23 +20,26 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.preference.PreferenceManager
-import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Marker
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.LatLng
+import com.google.maps.android.compose.CameraMoveStartedReason
+import com.google.maps.android.compose.GoogleMap
+import com.google.maps.android.compose.MapProperties
+import com.google.maps.android.compose.MapUiSettings
+import com.google.maps.android.compose.rememberCameraPositionState
+import kotlinx.coroutines.launch
 
-private const val DEFAULT_ZOOM = 17.0
+private const val DEFAULT_ZOOM = 17f
 private const val MS_TO_KMH = 3.6
 
 @Composable
 fun MenuInicial(onLogout: () -> Unit = {}) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
     val tracker = remember { LocationTracker(context) }
 
     var hasPermission by remember { mutableStateOf(tracker.hasPermission()) }
@@ -70,7 +54,6 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
         permissionDenied = !hasPermission
     }
 
-    // Pede a permissão ao abrir o ecrã
     LaunchedEffect(Unit) {
         if (!hasPermission) {
             permissionLauncher.launch(
@@ -82,62 +65,34 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
         }
     }
 
-    // Configuração do osmdroid + criação do mapa (uma só vez)
-    val mapView = remember {
-        // Carregar a configuração primeiro
-        Configuration.getInstance().load(
-            context, PreferenceManager.getDefaultSharedPreferences(context)
-        )
-        // Definir o User-Agent (identificação única da app)
-        Configuration.getInstance().userAgentValue = "RoadWatch-UPS-Miniprojeto/1.0 (${context.packageName})"
+    // Estado da câmara (substitui o MapView + controller)
+    val cameraPositionState = rememberCameraPositionState {
+        position = CameraPosition.fromLatLngZoom(LatLng(39.7436, -8.8071), DEFAULT_ZOOM)
+    }
 
-        MapView(context).apply {
-            setTileSource(TileSourceFactory.OpenTopo)
-            setMultiTouchControls(true)
-            controller.setZoom(DEFAULT_ZOOM)
-            controller.setCenter(GeoPoint(39.7436, -8.8071))
+    // Se o utilizador mexer no mapa com o dedo, deixa de o seguir
+    LaunchedEffect(cameraPositionState) {
+        snapshotFlow {
+            cameraPositionState.isMoving to cameraPositionState.cameraMoveStartedReason
+        }.collect { (moving, reason) ->
+            if (moving && reason == CameraMoveStartedReason.GESTURE) followUser = false
         }
     }
 
-    val userMarker = remember {
-        Marker(mapView).apply {
-            title = "A sua posição"
-            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-            mapView.overlays.add(this)
-        }
-    }
-
-    // Se o utilizador mexer no mapa, deixa de o seguir automaticamente
-    DisposableEffect(mapView) {
-        mapView.setOnTouchListener { _, event ->
-            if (event.action == MotionEvent.ACTION_MOVE) followUser = false
-            false
-        }
-        onDispose { mapView.setOnTouchListener(null) }
-    }
-
-    // Usa GPS e mapa quando o ecrã está visível (poupa bateria)
+    // GPS só enquanto o ecrã está visível (o mapa gere o seu próprio ciclo de vida)
     DisposableEffect(lifecycleOwner, hasPermission) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> {
-                    mapView.onResume()
-                    if (hasPermission) {
-                        tracker.start { location -> currentLocation = location }
-                    }
-                }
-                Lifecycle.Event.ON_PAUSE -> {
-                    mapView.onPause()
-                    tracker.stop()
-                }
+                Lifecycle.Event.ON_RESUME ->
+                    if (hasPermission) tracker.start { currentLocation = it }
+                Lifecycle.Event.ON_PAUSE -> tracker.stop()
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
 
-        // Se o ecrã já está visível quando a permissão é concedida
         if (hasPermission && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-            tracker.start { location -> currentLocation = location }
+            tracker.start { currentLocation = it }
         }
 
         onDispose {
@@ -146,35 +101,40 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
         }
     }
 
-    // Atualiza marcador e câmara quando chega uma nova localização
+    // Move a câmara quando chega uma nova localização
     LaunchedEffect(currentLocation) {
         currentLocation?.let { location ->
-            val point = GeoPoint(location.latitude, location.longitude)
-            userMarker.position = point
-            if (followUser) mapView.controller.animateTo(point)
-            mapView.invalidate()
+            if (followUser) {
+                cameraPositionState.animate(
+                    CameraUpdateFactory.newLatLng(LatLng(location.latitude, location.longitude))
+                )
+            }
         }
-    }
-
-    // Liberta recursos do mapa ao sair
-    DisposableEffect(Unit) {
-        onDispose { mapView.onDetach() }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
-        AndroidView(
-            factory = { mapView },
-            modifier = Modifier.fillMaxSize()
+        GoogleMap(
+            modifier = Modifier.fillMaxSize(),
+            cameraPositionState = cameraPositionState,
+            properties = MapProperties(isMyLocationEnabled = hasPermission),
+            uiSettings = MapUiSettings(
+                myLocationButtonEnabled = false, // usamos o nosso FAB
+                zoomControlsEnabled = false
+            )
         )
 
-        // Botão para recentrar no utilizador
         FloatingActionButton(
             onClick = {
                 followUser = true
                 currentLocation?.let {
-                    mapView.controller.animateTo(GeoPoint(it.latitude, it.longitude))
-                    mapView.controller.setZoom(DEFAULT_ZOOM)
+                    scope.launch {
+                        cameraPositionState.animate(
+                            CameraUpdateFactory.newLatLngZoom(
+                                LatLng(it.latitude, it.longitude), DEFAULT_ZOOM
+                            )
+                        )
+                    }
                 }
             },
             modifier = Modifier
@@ -184,7 +144,6 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
             Icon(Icons.Default.MyLocation, contentDescription = "Centrar na minha posição")
         }
 
-        // Painel inferior com velocidade e coordenadas
         ElevatedCard(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -214,9 +173,7 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
 
                 currentLocation == null -> Text(
                     text = "A procurar localização GPS...",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
                     textAlign = TextAlign.Center
                 )
 
@@ -272,7 +229,7 @@ private fun PermissionPanel(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "O RoadWatch precisa da sua localização para mostrar a sua posição no mapa.",
+            text = "O LibreMaps precisa da sua localização para mostrar a sua posição no mapa.",
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.bodyMedium
         )

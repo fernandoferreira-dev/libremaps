@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.services)
+    id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
 }
 
 android {
@@ -39,7 +40,6 @@ android {
 
 dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.4")
-    implementation("org.osmdroid:osmdroid-android:6.1.20")
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.analytics)
     implementation(libs.firebase.auth)
@@ -63,4 +63,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.preference:preference-ktx:1.2.1")
+    implementation("com.google.android.gms:play-services-maps:20.1.0")
+    implementation("com.google.maps.android:maps-compose:6.4.1")
 }
