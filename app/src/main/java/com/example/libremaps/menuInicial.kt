@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddLocationAlt
 import androidx.compose.material.icons.filled.EditLocationAlt
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.AddLocationAlt
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -52,9 +53,11 @@ import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.CameraMoveStartedReason
 import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.GoogleMap
+import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MapProperties
 import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.rememberCameraPositionState
+import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -81,6 +84,11 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
     var permissionDenied by remember { mutableStateOf(false) }
     var currentLocation by remember { mutableStateOf<Location?>(null) }
     var followUser by remember { mutableStateOf(true) }
+    var bookmarks by remember { mutableStateOf<List<Bookmark>>(emptyList()) }
+    var reportLocation by remember { mutableStateOf<LatLng?>(null) }
+    var reportType by remember { mutableStateOf("ACCIDENT") }
+    var reportDescription by remember { mutableStateOf("") }
+    var reportError by remember { mutableStateOf<String?>(null) }
     var showProfileDialog by remember { mutableStateOf(false) }
 
     // Estados da Viagem (Velocidade, Distância e Duração)
@@ -181,6 +189,15 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
         }
     }
 
+    LaunchedEffect(Unit) {
+        try {
+            val response = ApiClient.api.getBookmarks()
+            if (response.isSuccessful) bookmarks = response.body().orEmpty()
+        } catch (_: Exception) {
+            // Reports are optional; the map remains usable when the server is offline.
+        }
+    }
+
     // Estado da câmara
     val cameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(LatLng(39.7436, -8.8071), DEFAULT_ZOOM)
@@ -260,6 +277,10 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
         GoogleMap(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState,
+            onMapClick = {
+                reportLocation = it
+                reportError = null
+            },
             properties = MapProperties(isMyLocationEnabled = hasPermission),
             uiSettings = MapUiSettings(
                 myLocationButtonEnabled = false,
@@ -307,6 +328,28 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
                 imageVector = if (geofenceActive) Icons.Default.EditLocationAlt else Icons.Default.AddLocationAlt,
                 contentDescription = "Definir geofence"
             )
+        }
+
+        bookmarks.forEach { bookmark ->
+            Marker(
+                state = rememberMarkerState(position = LatLng(bookmark.latitude, bookmark.longitude)),
+                title = bookmark.type,
+                snippet = bookmark.description
+            )
+        }
+
+        FloatingActionButton(
+            onClick = {
+                currentLocation?.let {
+                    reportLocation = LatLng(it.latitude, it.longitude)
+                    reportError = null
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(16.dp)
+        ) {
+            Icon(Icons.Default.AddLocationAlt, contentDescription = "Comunicar perigo aqui")
         }
 
         FloatingActionButton(
@@ -660,6 +703,7 @@ private fun PermissionPanel(
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.bodyMedium
         )
+
         Button(onClick = onRequest, modifier = Modifier.padding(top = 12.dp)) {
             Text("Permitir localização")
         }
