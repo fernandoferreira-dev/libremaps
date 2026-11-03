@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Route
@@ -54,6 +55,7 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
     var permissionDenied by remember { mutableStateOf(false) }
     var currentLocation by remember { mutableStateOf<Location?>(null) }
     var followUser by remember { mutableStateOf(true) }
+    var showProfileDialog by remember { mutableStateOf(false) }
 
     // Estados da Viagem (Velocidade, Distância e Duração)
     var isTripActive by remember { mutableStateOf(true) }

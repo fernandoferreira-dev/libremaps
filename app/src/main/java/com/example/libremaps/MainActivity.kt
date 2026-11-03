@@ -2,7 +2,6 @@ package com.example.libremaps
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,13 +12,22 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ComposeView
 import com.example.libremaps.ui.theme.LibremapsTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent {
+
+        // 1. Infla o layout XML tradicional (activity_main.xml)
+        setContentView(R.layout.activity_main)
+
+        // 2. Obtém a referência do ComposeView presente no XML
+        val composeView = findViewById<ComposeView>(R.id.compose_view)
+
+        // 3. Define a UI em Jetpack Compose dentro do ComposeView hospedado no XML
+        composeView.setContent {
             LibremapsTheme {
                 // rememberSaveable mantém o estado ao rodar o ecrã
                 var loggedIn by rememberSaveable { mutableStateOf(false) }

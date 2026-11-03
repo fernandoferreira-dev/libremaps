@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -51,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -64,12 +66,18 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
+    val context = LocalContext.current
+    val sessionManager = remember { UserSessionManager(context) }
+    val focusManager = LocalFocusManager.current
+
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var isRegister by remember { mutableStateOf(false) }
+    var showForgotPasswordDialog by remember { mutableStateOf(false) }
+
     val state = vm.state
-    val focusManager = LocalFocusManager.current
 
     LaunchedEffect(state.loggedIn) {
         if (state.loggedIn) onLoggedIn()
@@ -80,6 +88,7 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
             isRegister = false
             email = ""
             password = ""
+            confirmPassword = ""
             passwordVisible = false
             vm.consumeRegistration()
         }
@@ -212,13 +221,14 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Password,
-                            imeAction = ImeAction.Done
+                            imeAction = if (isRegister) ImeAction.Next else ImeAction.Done
                         ),
                         keyboardActions = KeyboardActions(
+                            onNext = { if (isRegister) focusManager.moveFocus(FocusDirection.Down) },
                             onDone = {
                                 focusManager.clearFocus()
                                 if (!state.loading && email.isNotBlank() && password.isNotBlank()) {
-                                    vm.submit(email, password, isRegister)
+                                    vm.submit(email, password, isRegister, confirmPassword, sessionManager)
                                 }
                             }
                         ),
@@ -229,6 +239,59 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    // Campo Confirmação de Password (Apenas no Registo)
+                    if (isRegister) {
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        OutlinedTextField(
+                            value = confirmPassword,
+                            onValueChange = { confirmPassword = it },
+                            label = { Text("Confirmar Palavra-passe") },
+                            singleLine = true,
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = null
+                                )
+                            },
+                            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Password,
+                                imeAction = ImeAction.Done
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onDone = {
+                                    focusManager.clearFocus()
+                                    if (!state.loading && email.isNotBlank() && password.isNotBlank()) {
+                                        vm.submit(email, password, isRegister, confirmPassword, sessionManager)
+                                    }
+                                }
+                            ),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    // Esqueceu-se da Palavra-passe? (Apenas no Login)
+                    if (!isRegister) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = { showForgotPasswordDialog = true }) {
+                                Text(
+                                    text = "Esqueceu-se da palavra-passe?",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
 
                     // Alerta de Sucesso
                     AnimatedVisibility(
@@ -304,9 +367,9 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
                     Button(
                         onClick = {
                             focusManager.clearFocus()
-                            vm.submit(email, password, isRegister)
+                            vm.submit(email, password, isRegister, confirmPassword, sessionManager)
                         },
-                        enabled = !state.loading && email.isNotBlank() && password.isNotBlank(),
+                        enabled = !state.loading && email.isNotBlank() && password.isNotBlank() && (!isRegister || confirmPassword.isNotBlank()),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),
@@ -337,8 +400,9 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
             // Alternar entre Login e Registo
             TextButton(
                 onClick = {
-                    vm.clearError()
+                    vm.clearMessages()
                     isRegister = !isRegister
+                    confirmPassword = ""
                 },
                 shape = RoundedCornerShape(12.dp)
             ) {
@@ -350,5 +414,74 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
                 )
             }
         }
+    }
+
+    // Diálogo de Recuperação de Palavra-passe
+    if (showForgotPasswordDialog) {
+        var resetEmail by remember { mutableStateOf(email) }
+        var resetNewPassword by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = {
+                showForgotPasswordDialog = false
+                vm.clearMessages()
+            },
+            title = {
+                Text(
+                    text = "Recuperar Palavra-passe",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Introduza o seu email e a nova palavra-passe pretendida:",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    OutlinedTextField(
+                        value = resetEmail,
+                        onValueChange = { resetEmail = it },
+                        label = { Text("Email da conta") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = resetNewPassword,
+                        onValueChange = { resetNewPassword = it },
+                        label = { Text("Nova Palavra-passe (min 8 chars)") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        vm.resetPassword(resetEmail, resetNewPassword)
+                    },
+                    enabled = !state.loading && resetEmail.isNotBlank() && resetNewPassword.isNotBlank()
+                ) {
+                    Text("Redefinir")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showForgotPasswordDialog = false
+                        vm.clearMessages()
+                    }
+                ) {
+                    Text("Cancelar")
+                }
+            }
+        )
     }
 }
