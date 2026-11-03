@@ -14,10 +14,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.example.libremaps.ui.theme.LibremapsTheme
+import com.google.android.gms.location.GeofencingClient
+import com.google.android.gms.location.LocationServices
 
 class MainActivity : ComponentActivity() {
+    lateinit var geofencingClient: GeofencingClient
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        geofencingClient = LocationServices.getGeofencingClient(this)
         enableEdgeToEdge()
         setContent {
             LibremapsTheme {

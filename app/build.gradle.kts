@@ -65,5 +65,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.preference:preference-ktx:1.2.1")
     implementation("com.google.android.gms:play-services-maps:20.1.0")
+    implementation("com.google.android.gms:play-services-location:21.4.0")
     implementation("com.google.maps.android:maps-compose:6.4.1")
 }

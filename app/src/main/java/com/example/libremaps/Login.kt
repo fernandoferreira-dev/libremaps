@@ -152,7 +152,7 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
 
                     // Campo Email
                     OutlinedTextField(
-                        value = email,
+                        value = "teste@gmail.com", //email
                         onValueChange = { email = it },
                         label = { Text("Endereço de Email") },
                         singleLine = true,
@@ -191,7 +191,7 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
 
                     // Campo Password
                     OutlinedTextField(
-                        value = password,
+                        value = "12345678", //password
                         onValueChange = { password = it },
                         label = { Text("Palavra-passe") },
                         singleLine = true,
