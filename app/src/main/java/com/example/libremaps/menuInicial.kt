@@ -1,15 +1,25 @@
 package com.example.libremaps
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.location.Location
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddLocationAlt
+import androidx.compose.material.icons.filled.EditLocationAlt
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
@@ -20,20 +30,27 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.google.android.gms.location.Geofence
+import com.google.android.gms.location.GeofencingRequest
+import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.CameraMoveStartedReason
+import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.MapProperties
 import com.google.maps.android.compose.MapUiSettings
@@ -43,6 +60,15 @@ import kotlinx.coroutines.launch
 
 private const val DEFAULT_ZOOM = 17f
 private const val MS_TO_KMH = 3.6
+
+private const val GEOFENCE_ID = "user_geofence"
+private const val DEFAULT_GEOFENCE_RADIUS_M = 150f
+
+private fun hasBackgroundLocationPermission(context: Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
 
 @Composable
 fun MenuInicial(onLogout: () -> Unit = {}) {
@@ -64,11 +90,84 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
     var elapsedTimeMs by remember { mutableLongStateOf(0L) }
     var previousLocation by remember { mutableStateOf<Location?>(null) }
 
+    // Estados do Geofence
+    var geofenceCenter by rememberSaveable { mutableStateOf<LatLng?>(null) }
+    var geofenceRadius by rememberSaveable { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
+    var showGeofenceDialog by remember { mutableStateOf(false) }
+    var dialogRadius by remember { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
+    var hasBackgroundPermission by remember { mutableStateOf(hasBackgroundLocationPermission(context)) }
+    var pendingGeofence by remember { mutableStateOf<Pair<LatLng, Float>?>(null) }
+
+    val geofencingClient = remember { LocationServices.getGeofencingClient(context) }
+    val geofencePendingIntent = remember {
+        val intent = Intent(context, GeofenceBroadcastReceiver::class.java)
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        PendingIntent.getBroadcast(context, 0, intent, flags)
+    }
+
+    // Regista (ou substitui, pois o ID é o mesmo) o geofence no Google Play Services
+    @SuppressLint("MissingPermission")
+    fun registerGeofence(center: LatLng, radius: Float) {
+        val geofence = Geofence.Builder()
+            .setRequestId(GEOFENCE_ID)
+            .setCircularRegion(center.latitude, center.longitude, radius)
+            .setExpirationDuration(Geofence.NEVER_EXPIRE)
+            .setTransitionTypes(
+                Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT
+            )
+            .build()
+
+        val request = GeofencingRequest.Builder()
+            .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
+            .addGeofence(geofence)
+            .build()
+
+        geofencingClient.addGeofences(request, geofencePendingIntent)
+            .addOnSuccessListener {
+                geofenceCenter = center
+                geofenceRadius = radius
+                Toast.makeText(context, "Perimetro definido (${radius.toInt()} m)", Toast.LENGTH_SHORT).show()
+            }
+            .addOnFailureListener {
+                Toast.makeText(context, "Erro ao definir perimetro: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+    }
+
+    fun removeGeofence() {
+        geofencingClient.removeGeofences(listOf(GEOFENCE_ID))
+            .addOnSuccessListener {
+                geofenceCenter = null
+                Toast.makeText(context, "Perimetro removido", Toast.LENGTH_SHORT).show()
+            }
+            .addOnFailureListener {
+                Toast.makeText(context, "Erro ao remover perimetro: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         hasPermission = result.values.any { it }
         permissionDenied = !hasPermission
+    }
+
+    // Permissão de localização em segundo plano (pedida à parte, depois da permissão normal)
+    val backgroundPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasBackgroundPermission = granted || hasBackgroundLocationPermission(context)
+        val pending = pendingGeofence
+        pendingGeofence = null
+        if (hasBackgroundPermission && pending != null) {
+            registerGeofence(pending.first, pending.second)
+        } else if (!hasBackgroundPermission) {
+            Toast.makeText(
+                context,
+                "Para usar perimetros, escolha \"Permitir sempre\" nas definições de localização.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -124,8 +223,11 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
     DisposableEffect(lifecycleOwner, hasPermission) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME ->
+                Lifecycle.Event.ON_RESUME -> {
+                    // O utilizador pode ter concedido a permissão em segundo plano nas definições
+                    hasBackgroundPermission = hasBackgroundLocationPermission(context)
                     if (hasPermission) tracker.start { currentLocation = it }
+                }
                 Lifecycle.Event.ON_PAUSE -> tracker.stop()
                 else -> Unit
             }
@@ -163,7 +265,49 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
                 myLocationButtonEnabled = false,
                 zoomControlsEnabled = false
             )
-        )
+        ) {
+            // Desenha o geofence ativo no mapa
+            geofenceCenter?.let { center ->
+                Circle(
+                    center = center,
+                    radius = geofenceRadius.toDouble(),
+                    fillColor = Color(0x334285F4),
+                    strokeColor = Color(0xFF4285F4),
+                    strokeWidth = 4f
+                )
+            }
+        }
+
+        // Botão de geofence (canto superior esquerdo)
+        val geofenceActive = geofenceCenter != null
+        FloatingActionButton(
+            onClick = {
+                when {
+                    !hasPermission -> Toast.makeText(
+                        context, "Permita primeiro o acesso à localização.", Toast.LENGTH_SHORT
+                    ).show()
+
+                    currentLocation == null -> Toast.makeText(
+                        context, "A aguardar localização GPS...", Toast.LENGTH_SHORT
+                    ).show()
+
+                    else -> {
+                        dialogRadius = if (geofenceActive) geofenceRadius else DEFAULT_GEOFENCE_RADIUS_M
+                        showGeofenceDialog = true
+                    }
+                }
+            },
+            containerColor = if (geofenceActive) MaterialTheme.colorScheme.tertiaryContainer
+            else MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(16.dp)
+        ) {
+            Icon(
+                imageVector = if (geofenceActive) Icons.Default.EditLocationAlt else Icons.Default.AddLocationAlt,
+                contentDescription = "Definir geofence"
+            )
+        }
 
         FloatingActionButton(
             onClick = {
@@ -243,6 +387,97 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
             }
         }
     }
+
+    if (showGeofenceDialog) {
+        //abrir um dialog quando o user carrega no botao das geofences
+        GeofenceDialog(
+            //tamanho da geofence
+            radius = dialogRadius,
+            onRadiusChange = { dialogRadius = it },
+            isActive = geofenceCenter != null,
+            onConfirm = {
+                //loc = location, nome simplificado no codigo.
+                val loc = currentLocation //localização atual do dispositivo do utilizador
+                showGeofenceDialog = false
+                if (loc != null) {
+                    val center = LatLng(loc.latitude, loc.longitude)
+                    if (hasBackgroundPermission) {
+                        registerGeofence(center, dialogRadius)
+                    } else {
+                        pendingGeofence = center to dialogRadius
+                        backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                    }
+                }
+            },
+            onRemove = {
+                showGeofenceDialog = false
+                removeGeofence()
+            },
+            onDismiss = { showGeofenceDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun GeofenceDialog(
+    //vars do dialogo de definição do geofence
+    radius: Float,
+    onRadiusChange: (Float) -> Unit,
+    isActive: Boolean,
+    onConfirm: () -> Unit,
+    onRemove: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var textValue by remember(radius) { mutableStateOf(if (radius > 0) radius.toInt().toString() else "") }
+    val parsedValue = textValue.toFloatOrNull()
+    val isValid = parsedValue != null && parsedValue > 0f
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isActive) "Redefinir geofence" else "Definir geofence") },
+        text = {
+            Column {
+                //frontend do dialogo
+                Text(
+                    text = "Cria uma zona circular centrada na sua posição atual. " +
+                            "Será notificado ao entrar e ao sair.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = textValue,
+                    onValueChange = { input ->
+                        textValue = input
+                        val newRadius = input.toFloatOrNull()
+                        if (newRadius != null && newRadius > 0f) {
+                            onRadiusChange(newRadius)
+                        }
+                    },
+                    label = { Text("Raio (metros)") },
+                    suffix = { Text("m") },
+                    singleLine = true,
+                    isError = !isValid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (isActive) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = onRemove) {
+                        Text("Remover geofence atual", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = isValid
+            ) { Text(if (isActive) "Redefinir aqui" else "Definir aqui") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        }
+    )
 }
 
 @Composable
