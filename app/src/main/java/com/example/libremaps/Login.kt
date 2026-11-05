@@ -63,7 +63,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
-fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
+fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: (String) -> Unit) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -71,8 +71,8 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: () -> Unit) {
     val state = vm.state
     val focusManager = LocalFocusManager.current
 
-    LaunchedEffect(state.loggedIn) {
-        if (state.loggedIn) onLoggedIn()
+    LaunchedEffect(state.loggedIn, state.token) {
+        state.token?.let(onLoggedIn)
     }
 
     LaunchedEffect(state.registered) {

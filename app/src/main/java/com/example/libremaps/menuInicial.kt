@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -49,6 +50,7 @@ import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.CameraMoveStartedReason
 import com.google.maps.android.compose.Circle
@@ -74,7 +76,7 @@ private fun hasBackgroundLocationPermission(context: Context): Boolean =
             ) == PackageManager.PERMISSION_GRANTED
 
 @Composable
-fun MenuInicial(onLogout: () -> Unit = {}) {
+fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -89,6 +91,9 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
     var reportType by remember { mutableStateOf("ACCIDENT") }
     var reportDescription by remember { mutableStateOf("") }
     var reportError by remember { mutableStateOf<String?>(null) }
+    var reportSubmitting by remember { mutableStateOf(false) }
+    var selectedBookmark by remember { mutableStateOf<Bookmark?>(null) }
+    var bookmarkActionError by remember { mutableStateOf<String?>(null) }
     var showProfileDialog by remember { mutableStateOf(false) }
 
     // Estados da Viagem (Velocidade, Distância e Duração)
@@ -189,12 +194,15 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
         }
     }
 
-    LaunchedEffect(Unit) {
-        try {
-            val response = ApiClient.api.getBookmarks()
-            if (response.isSuccessful) bookmarks = response.body().orEmpty()
-        } catch (_: Exception) {
-            // Reports are optional; the map remains usable when the server is offline.
+    LaunchedEffect(token) {
+        while (true) {
+            try {
+                val response = ApiClient.api.getBookmarks()
+                if (response.isSuccessful) bookmarks = response.body().orEmpty()
+            } catch (_: Exception) {
+                // Keep showing the last successful set of reports.
+            }
+            delay(30_000L)
         }
     }
 
@@ -334,7 +342,12 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
             Marker(
                 state = rememberMarkerState(position = LatLng(bookmark.latitude, bookmark.longitude)),
                 title = bookmark.type,
-                snippet = bookmark.description
+                snippet = bookmark.description,
+                icon = BitmapDescriptorFactory.defaultMarker(bookmarkHue(bookmark.type)),
+                onInfoWindowClick = {
+                    selectedBookmark = bookmark
+                    bookmarkActionError = null
+                }
             )
         }
 
@@ -370,6 +383,23 @@ fun MenuInicial(onLogout: () -> Unit = {}) {
                 .padding(16.dp)
         ) {
             Icon(Icons.Default.MyLocation, contentDescription = "Centrar na minha posição")
+        }
+
+        IconButton(
+            onClick = {
+                scope.launch {
+                    try {
+                        ApiClient.api.logout("Bearer $token")
+                    } finally {
+                        onLogout()
+                    }
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(16.dp)
+        ) {
+            Icon(Icons.Default.Logout, contentDescription = "Terminar sessão")
         }
 
         ElevatedCard(
@@ -521,6 +551,148 @@ private fun GeofenceDialog(
             TextButton(onClick = onDismiss) { Text("Cancelar") }
         }
     )
+
+        reportLocation?.let { location ->
+            AlertDialog(
+                onDismissRequest = { reportLocation = null },
+                title = { Text("Comunicar perigo") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Escolha o tipo de ocorrência para este local.")
+                        listOf("ACCIDENT" to "Acidente", "DANGER" to "Perigo", "ROAD_CLOSED" to "Estrada fechada")
+                            .forEach { (value, label) ->
+                                FilterChip(
+                                    selected = reportType == value,
+                                    onClick = { reportType = value },
+                                    label = { Text(label) }
+                                )
+                            }
+                        OutlinedTextField(
+                            value = reportDescription,
+                            onValueChange = { reportDescription = it },
+                            label = { Text("Descrição (opcional)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 3
+                        )
+                        reportError?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (reportSubmitting) return@TextButton
+                            reportSubmitting = true
+                            scope.launch {
+                                try {
+                                    val response = ApiClient.api.createBookmark(
+                                        authorization = "Bearer $token",
+                                        BookmarkRequest(
+                                            type = reportType,
+                                            description = reportDescription.trim().ifBlank { null },
+                                            latitude = location.latitude,
+                                            longitude = location.longitude
+                                        )
+                                    )
+                                    if (response.isSuccessful) {
+                                        response.body()?.let { bookmarks = bookmarks + it }
+                                        reportDescription = ""
+                                        reportLocation = null
+                                    } else {
+                                        reportError = "Não foi possível guardar a ocorrência."
+                                    }
+                                } catch (_: Exception) {
+                                    reportError = "Sem ligação ao servidor."
+                                } finally {
+                                    reportSubmitting = false
+                                }
+                            }
+                        }
+                    ) {
+                        if (reportSubmitting) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("Comunicar")
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { reportLocation = null }) { Text("Cancelar") }
+                }
+            )
+        }
+
+        selectedBookmark?.let { bookmark ->
+            AlertDialog(
+                onDismissRequest = { selectedBookmark = null },
+                title = { Text(bookmark.type) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(bookmark.description ?: "Sem descrição")
+                        Text("Confirmações: ${bookmark.confirmations}")
+                        bookmarkActionError?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                },
+                confirmButton = {
+                    Row {
+                        TextButton(
+                            onClick = {
+                                scope.launch {
+                                    val response = ApiClient.api.confirmBookmark("Bearer $token", bookmark.id)
+                                    if (response.isSuccessful) {
+                                        bookmarks = bookmarks.map {
+                                            if (it.id == bookmark.id) it.copy(confirmations = it.confirmations + 1) else it
+                                        }
+                                        selectedBookmark = null
+                                    } else {
+                                        bookmarkActionError = response.body()?.message ?: "Não foi possível confirmar."
+                                    }
+                                }
+                            }
+                        ) { Text("Confirmar") }
+                        TextButton(
+                            onClick = {
+                                scope.launch {
+                                    val response = ApiClient.api.reportBookmark(
+                                        authorization = "Bearer $token",
+                                        id = bookmark.id,
+                                        req = BookmarkReportRequest("Informação incorreta")
+                                    )
+                                    if (response.isSuccessful) selectedBookmark = null
+                                    else bookmarkActionError = response.body()?.message ?: "Não foi possível sinalizar."
+                                }
+                            }
+                        ) { Text("Sinalizar") }
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                val response = ApiClient.api.deleteBookmark("Bearer $token", bookmark.id)
+                                if (response.isSuccessful) {
+                                    bookmarks = bookmarks.filterNot { it.id == bookmark.id }
+                                    selectedBookmark = null
+                                } else {
+                                    bookmarkActionError = response.body()?.message ?: "Só pode remover as suas ocorrências."
+                                }
+                            }
+                        }
+                    ) { Text("Remover") }
+                }
+            )
+        }
+    }
+}
+
+private fun bookmarkHue(type: String): Float = when (type) {
+    "ACCIDENT" -> BitmapDescriptorFactory.HUE_RED
+    "DANGER" -> BitmapDescriptorFactory.HUE_ORANGE
+    "ROAD_CLOSED" -> BitmapDescriptorFactory.HUE_VIOLET
+    else -> BitmapDescriptorFactory.HUE_AZURE
 }
 
 @Composable

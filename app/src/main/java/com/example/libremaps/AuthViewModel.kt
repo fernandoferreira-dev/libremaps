@@ -13,6 +13,7 @@ data class AuthUiState(
     val error: String? = null,
     val successMessage: String? = null,
     val loggedIn: Boolean = false,
+    val token: String? = null,
     val registered: Boolean = false
 )
 
@@ -45,7 +46,7 @@ class AuthViewModel : ViewModel() {
                             successMessage = "Conta criada com sucesso! Inicie sessão para continuar."
                         )
                     } else {
-                        AuthUiState(loggedIn = true)
+                        AuthUiState(loggedIn = true, token = res.body()?.token)
                     }
                 } else {
                     val serverMsg = try {

@@ -36,15 +36,23 @@ class MainActivity : ComponentActivity() {
             LibremapsTheme {
                 // rememberSaveable mantém o estado ao rodar o ecrã
                 var loggedIn by rememberSaveable { mutableStateOf(false) }
+                var sessionToken by rememberSaveable { mutableStateOf<String?>(null) }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
                         if (loggedIn) {
-                            MenuInicial()
+                            MenuInicial(
+                                token = sessionToken.orEmpty(),
+                                onLogout = {
+                                    loggedIn = false
+                                    sessionToken = null
+                                }
+                            )
                         } else {
                             Login(
-                                onLoggedIn = {
+                                onLoggedIn = { token ->
                                     // Login válido -> abre o menu inicial
+                                    sessionToken = token
                                     loggedIn = true
                                 }
                             )

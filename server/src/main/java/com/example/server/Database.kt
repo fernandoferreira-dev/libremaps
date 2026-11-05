@@ -9,10 +9,13 @@ lateinit var dataSource: DataSource
 fun configureDatabases() {
     val config = HikariConfig().apply {
         driverClassName = "org.mariadb.jdbc.Driver"
-        jdbcUrl = System.getenv("JDBC_URL") ?: "jdbc:mariadb://85.247.43.227:3306/libremaps"
-        username = System.getenv("DB_USER") ?: "diogo"
-        password = System.getenv("DB_PASS") ?: "1234"
+        jdbcUrl = "jdbc:mariadb://85.247.43.227:3306/libremaps"
+        username = "fernando"
+        password = "1234"
         maximumPoolSize = 10
+        minimumIdle = 2
+        maxLifetime = 600_000L
+        keepaliveTime = 60_000L
     }
     dataSource = HikariDataSource(config)
     dataSource.connection.use { connection ->
@@ -21,11 +24,39 @@ fun configureDatabases() {
                 """
                 CREATE TABLE IF NOT EXISTS map_bookmarks (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_id BIGINT NULL,
                     type VARCHAR(40) NOT NULL,
                     description VARCHAR(255),
                     latitude DOUBLE NOT NULL,
                     longitude DOUBLE NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """.trimIndent()
+            )
+            try {
+                statement.executeUpdate("ALTER TABLE map_bookmarks ADD COLUMN user_id BIGINT NULL")
+            } catch (_: Exception) {
+                // Existing installations already have the column.
+            }
+            statement.executeUpdate(
+                """
+                CREATE TABLE IF NOT EXISTS bookmark_reports (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    bookmark_id BIGINT NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    reason VARCHAR(255),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY one_report_per_user (bookmark_id, user_id)
+                )
+                """.trimIndent()
+            )
+            statement.executeUpdate(
+                """
+                CREATE TABLE IF NOT EXISTS bookmark_confirmations (
+                    bookmark_id BIGINT NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (bookmark_id, user_id)
                 )
                 """.trimIndent()
             )
