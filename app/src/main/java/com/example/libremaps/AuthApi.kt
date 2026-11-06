@@ -1,5 +1,6 @@
 package com.example.libremaps
 
+import androidx.room.Entity
 import okhttp3.OkHttpClient
 import retrofit2.Response
 import retrofit2.Retrofit
@@ -11,6 +12,7 @@ import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.Path
 import java.util.concurrent.TimeUnit
+import androidx.room.PrimaryKey
 
 // ---------- Autenticação ----------
 data class AuthRequest(val email: String, val password: String)
@@ -38,6 +40,16 @@ data class BookmarkRequest(
     val longitude: Double
 )
 
+@Entity(tableName = "bookmarks")
+data class BookmarkEntity(
+    @PrimaryKey val id: Long,
+    val type: String,
+    val description: String?,
+    val latitude: Double,
+    val longitude: Double,
+    val confirmations: Int = 0
+)
+
 data class Bookmark(
     val id: Long,
     val type: String,
@@ -46,6 +58,9 @@ data class Bookmark(
     val longitude: Double,
     val confirmations: Int = 0
 )
+
+fun Bookmark.toEntity(): BookmarkEntity = BookmarkEntity(id, type, description, latitude, longitude, confirmations)
+fun BookmarkEntity.toModel(): Bookmark = Bookmark(id, type, description, latitude, longitude, confirmations)
 
 data class BookmarkReportRequest(val reason: String?)
 
@@ -89,7 +104,8 @@ object ApiClient {
         .build()
 
     val api: AuthApi = Retrofit.Builder()
-        .baseUrl("http://10.0.2.2:8080/") // 10.0.2.2 = localhost do PC visto pelo emulador Android; num telemóvel real usem o IP da máquina na rede
+        .baseUrl("http://10.0.2.2:8080/") // Mudem o ip conforme necessário ( 127.0.0.1 se for no emulador )
+        //.baseUrl("http://127.0.0.1:8080/") // Mudem o ip conforme necessário ( 127.0.0.1 se for no emulador ) 10.0.2.2:8080
         .client(httpClient)
         .addConverterFactory(GsonConverterFactory.create())
         .build()

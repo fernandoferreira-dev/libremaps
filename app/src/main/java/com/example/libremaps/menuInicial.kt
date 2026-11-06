@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -82,9 +83,15 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
 
     var hasPermission by remember { mutableStateOf(tracker.hasPermission()) }
     var permissionDenied by remember { mutableStateOf(false) }
+
+    // Base de dados local Room
+    val db = remember { AppDatabase.getDatabase(context) }
+    val bookmarkDao = remember { db.bookmarkDao() }
+    val localBookmarkEntities by bookmarkDao.getAllBookmarks().collectAsState(initial = emptyList())
+    val bookmarks = remember(localBookmarkEntities) { localBookmarkEntities.map { it.toModel() } }
+
     var currentLocation by remember { mutableStateOf<Location?>(null) }
     var followUser by remember { mutableStateOf(true) }
-    var bookmarks by remember { mutableStateOf<List<Bookmark>>(emptyList()) }
     var reportLocation by remember { mutableStateOf<LatLng?>(null) }
     var reportType by remember { mutableStateOf("ACCIDENT") }
     var reportDescription by remember { mutableStateOf("") }
@@ -116,19 +123,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or
                 (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
         PendingIntent.getBroadcast(context, 0, intent, flags)
-    }
-
-    // Termina a sessão no servidor (se possível) e depois no cliente
-    fun performLogout() {
-        scope.launch {
-            try {
-                ApiClient.api.logout("Bearer $token")
-            } catch (_: Exception) {
-                // Mesmo sem ligação, termina a sessão localmente
-            } finally {
-                onLogout()
-            }
-        }
     }
 
     // Regista (ou substitui, pois o ID é o mesmo) o geofence no Google Play Services
@@ -210,9 +204,13 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         while (true) {
             try {
                 val response = ApiClient.api.getBookmarks()
-                if (response.isSuccessful) bookmarks = response.body().orEmpty()
+                if (response.isSuccessful) {
+                    val remoteList = response.body().orEmpty()
+                    bookmarkDao.deleteAll()
+                    bookmarkDao.insertAll(remoteList.map { it.toEntity() })
+                }
             } catch (_: Exception) {
-                // Keep showing the last successful set of reports.
+                // Em caso de falha de rede/offline, mantém os bookmarks guardados no room sqlite
             }
             delay(30_000L)
         }
@@ -409,14 +407,8 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 }
             }
 
-            // Canto superior direito: Perfil e Centrar
+            // Canto superior direito
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                FloatingActionButton(
-                    onClick = { showProfileDialog = true }
-                ) {
-                    Icon(Icons.Default.Person, contentDescription = "Perfil de Utilizador")
-                }
-
                 FloatingActionButton(
                     onClick = {
                         followUser = true
@@ -433,17 +425,24 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 ) {
                     Icon(Icons.Default.MyLocation, contentDescription = "Centrar na minha posição")
                 }
-            }
-        }
 
-        if (showProfileDialog) {
-            ProfileDialog(
-                onDismiss = { showProfileDialog = false },
-                onLogout = {
-                    showProfileDialog = false
-                    performLogout()
+                FloatingActionButton(
+                    onClick = {
+                        scope.launch {
+                            try {
+                                ApiClient.api.logout("Bearer $token")
+                            } catch (_: Exception) {
+                            } finally {
+                                onLogout()
+                            }
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                ) {
+                    Icon(Icons.Default.Logout, contentDescription = "Terminar sessão")
                 }
-            )
+            }
         }
 
         ElevatedCard(
@@ -578,7 +577,9 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                                     )
                                 )
                                 if (response.isSuccessful) {
-                                    response.body()?.let { bookmarks = bookmarks + it }
+                                    response.body()?.let { newBookmark ->
+                                        bookmarkDao.insert(newBookmark.toEntity())
+                                    }
                                     reportDescription = ""
                                     reportLocation = null
                                 } else {
@@ -626,9 +627,8 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                                 try {
                                     val response = ApiClient.api.confirmBookmark("Bearer $token", bookmark.id)
                                     if (response.isSuccessful) {
-                                        bookmarks = bookmarks.map {
-                                            if (it.id == bookmark.id) it.copy(confirmations = it.confirmations + 1) else it
-                                        }
+                                        val updatedBookmark = bookmark.copy(confirmations = bookmark.confirmations + 1)
+                                        bookmarkDao.insert(updatedBookmark.toEntity())
                                         selectedBookmark = null
                                     } else {
                                         bookmarkActionError = response.body()?.message ?: "Não foi possível confirmar."
@@ -665,7 +665,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                             try {
                                 val response = ApiClient.api.deleteBookmark("Bearer $token", bookmark.id)
                                 if (response.isSuccessful) {
-                                    bookmarks = bookmarks.filterNot { it.id == bookmark.id }
+                                    bookmarkDao.deleteById(bookmark.id)
                                     selectedBookmark = null
                                 } else {
                                     bookmarkActionError = response.body()?.message ?: "Só pode remover as suas ocorrências."
@@ -772,6 +772,7 @@ private fun LocationInfoPanel(
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Velocidade
             TripMetricItem(
                 icon = Icons.Default.Speed,
                 value = "%.0f".format(speedKmh),
@@ -779,6 +780,7 @@ private fun LocationInfoPanel(
                 label = "Velocidade"
             )
 
+            // Distância
             TripMetricItem(
                 icon = Icons.Default.Route,
                 value = formatDistanceValue(totalDistanceMeters),
@@ -786,6 +788,7 @@ private fun LocationInfoPanel(
                 label = "Distância"
             )
 
+            // Duração
             TripMetricItem(
                 icon = Icons.Default.Timer,
                 value = formatDuration(elapsedTimeMs),
