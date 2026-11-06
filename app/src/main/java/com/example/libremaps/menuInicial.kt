@@ -21,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddLocationAlt
 import androidx.compose.material.icons.filled.EditLocationAlt
 import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.AddLocationAlt
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -107,6 +106,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var geofenceCenter by rememberSaveable { mutableStateOf<LatLng?>(null) }
     var geofenceRadius by rememberSaveable { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
     var showGeofenceDialog by remember { mutableStateOf(false) }
+    var showLocationMenu by remember { mutableStateOf(false) }
     var dialogRadius by remember { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
     var hasBackgroundPermission by remember { mutableStateOf(hasBackgroundLocationPermission(context)) }
     var pendingGeofence by remember { mutableStateOf<Pair<LatLng, Float>?>(null) }
@@ -305,101 +305,134 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                     strokeWidth = 4f
                 )
             }
+
+            bookmarks.forEach { bookmark ->
+                Marker(
+                    state = rememberMarkerState(position = LatLng(bookmark.latitude, bookmark.longitude)),
+                    title = bookmark.type,
+                    snippet = bookmark.description,
+                    icon = BitmapDescriptorFactory.defaultMarker(bookmarkHue(bookmark.type)),
+                    onInfoWindowClick = {
+                        selectedBookmark = bookmark
+                        bookmarkActionError = null
+                    }
+                )
+            }
         }
 
-        // Botão de geofence (canto superior esquerdo)
         val geofenceActive = geofenceCenter != null
-        FloatingActionButton(
-            onClick = {
-                when {
-                    !hasPermission -> Toast.makeText(
-                        context, "Permita primeiro o acesso à localização.", Toast.LENGTH_SHORT
-                    ).show()
 
-                    currentLocation == null -> Toast.makeText(
-                        context, "A aguardar localização GPS...", Toast.LENGTH_SHORT
-                    ).show()
-
-                    else -> {
-                        dialogRadius = if (geofenceActive) geofenceRadius else DEFAULT_GEOFENCE_RADIUS_M
-                        showGeofenceDialog = true
-                    }
-                }
-            },
-            containerColor = if (geofenceActive) MaterialTheme.colorScheme.tertiaryContainer
-            else MaterialTheme.colorScheme.primaryContainer,
+        // Barra de controlo superior com statusBarsPadding
+        Row(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(16.dp)
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = if (geofenceActive) Icons.Default.EditLocationAlt else Icons.Default.AddLocationAlt,
-                contentDescription = "Definir geofence"
-            )
-        }
-
-        bookmarks.forEach { bookmark ->
-            Marker(
-                state = rememberMarkerState(position = LatLng(bookmark.latitude, bookmark.longitude)),
-                title = bookmark.type,
-                snippet = bookmark.description,
-                icon = BitmapDescriptorFactory.defaultMarker(bookmarkHue(bookmark.type)),
-                onInfoWindowClick = {
-                    selectedBookmark = bookmark
-                    bookmarkActionError = null
+            // Canto superior esquerdo: Botão Único de Geofence e Localização
+            Box {
+                FloatingActionButton(
+                    onClick = { showLocationMenu = true },
+                    containerColor = if (geofenceActive) MaterialTheme.colorScheme.tertiaryContainer
+                    else MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Icon(
+                        imageVector = if (geofenceActive) Icons.Default.EditLocationAlt else Icons.Default.AddLocationAlt,
+                        contentDescription = "Menu de Geofence e Ocorrências"
+                    )
                 }
-            )
-        }
 
-        FloatingActionButton(
-            onClick = {
-                currentLocation?.let {
-                    reportLocation = LatLng(it.latitude, it.longitude)
-                    reportError = null
-                }
-            },
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(16.dp)
-        ) {
-            Icon(Icons.Default.AddLocationAlt, contentDescription = "Comunicar perigo aqui")
-        }
-
-        FloatingActionButton(
-            onClick = {
-                followUser = true
-                currentLocation?.let {
-                    scope.launch {
-                        cameraPositionState.animate(
-                            CameraUpdateFactory.newLatLngZoom(
-                                LatLng(it.latitude, it.longitude), DEFAULT_ZOOM
+                DropdownMenu(
+                    expanded = showLocationMenu,
+                    onDismissRequest = { showLocationMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(if (geofenceActive) "Redefinir / Remover Geofence" else "Definir Perímetro (Geofence)") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (geofenceActive) Icons.Default.EditLocationAlt else Icons.Default.AddLocationAlt,
+                                contentDescription = null
                             )
-                        )
-                    }
-                }
-            },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(16.dp)
-        ) {
-            Icon(Icons.Default.MyLocation, contentDescription = "Centrar na minha posição")
-        }
+                        },
+                        onClick = {
+                            showLocationMenu = false
+                            when {
+                                !hasPermission -> Toast.makeText(
+                                    context, "Permita primeiro o acesso à localização.", Toast.LENGTH_SHORT
+                                ).show()
 
-        IconButton(
-            onClick = {
-                scope.launch {
-                    try {
-                        ApiClient.api.logout("Bearer $token")
-                    } finally {
-                        onLogout()
-                    }
+                                currentLocation == null -> Toast.makeText(
+                                    context, "A aguardar localização GPS...", Toast.LENGTH_SHORT
+                                ).show()
+
+                                else -> {
+                                    dialogRadius = if (geofenceActive) geofenceRadius else DEFAULT_GEOFENCE_RADIUS_M
+                                    showGeofenceDialog = true
+                                }
+                            }
+                        }
+                    )
+
+                    HorizontalDivider()
+
+                    DropdownMenuItem(
+                        text = { Text("Comunicar Perigo / Ocorrência") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.AddLocationAlt,
+                                contentDescription = null
+                            )
+                        },
+                        onClick = {
+                            showLocationMenu = false
+                            currentLocation?.let {
+                                reportLocation = LatLng(it.latitude, it.longitude)
+                                reportError = null
+                            }
+                        }
+                    )
                 }
-            },
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(16.dp)
-        ) {
-            Icon(Icons.Default.Logout, contentDescription = "Terminar sessão")
+            }
+
+            // Canto superior direito
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FloatingActionButton(
+                    onClick = {
+                        followUser = true
+                        currentLocation?.let {
+                            scope.launch {
+                                cameraPositionState.animate(
+                                    CameraUpdateFactory.newLatLngZoom(
+                                        LatLng(it.latitude, it.longitude), DEFAULT_ZOOM
+                                    )
+                                )
+                            }
+                        }
+                    }
+                ) {
+                    Icon(Icons.Default.MyLocation, contentDescription = "Centrar na minha posição")
+                }
+
+                FloatingActionButton(
+                    onClick = {
+                        scope.launch {
+                            try {
+                                ApiClient.api.logout("Bearer $token")
+                            } catch (_: Exception) {
+                            } finally {
+                                onLogout()
+                            }
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                ) {
+                    Icon(Icons.Default.Logout, contentDescription = "Terminar sessão")
+                }
+            }
         }
 
         ElevatedCard(
@@ -476,7 +509,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                     val center = LatLng(loc.latitude, loc.longitude)
                     if (hasBackgroundPermission) {
                         registerGeofence(center, dialogRadius)
-                    } else {
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         pendingGeofence = center to dialogRadius
                         backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
                     }
@@ -487,6 +520,140 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 removeGeofence()
             },
             onDismiss = { showGeofenceDialog = false }
+        )
+    }
+
+    reportLocation?.let { location ->
+        AlertDialog(
+            onDismissRequest = { reportLocation = null },
+            title = { Text("Comunicar perigo") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Escolha o tipo de ocorrência para este local.")
+                    listOf("ACCIDENT" to "Acidente", "DANGER" to "Perigo", "ROAD_CLOSED" to "Estrada fechada")
+                        .forEach { (value, label) ->
+                            FilterChip(
+                                selected = reportType == value,
+                                onClick = { reportType = value },
+                                label = { Text(label) }
+                            )
+                        }
+                    OutlinedTextField(
+                        value = reportDescription,
+                        onValueChange = { reportDescription = it },
+                        label = { Text("Descrição (opcional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 3
+                    )
+                    reportError?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (reportSubmitting) return@TextButton
+                        reportSubmitting = true
+                        scope.launch {
+                            try {
+                                val response = ApiClient.api.createBookmark(
+                                    authorization = "Bearer $token",
+                                    BookmarkRequest(
+                                        type = reportType,
+                                        description = reportDescription.trim().ifBlank { null },
+                                        latitude = location.latitude,
+                                        longitude = location.longitude
+                                    )
+                                )
+                                if (response.isSuccessful) {
+                                    response.body()?.let { bookmarks = bookmarks + it }
+                                    reportDescription = ""
+                                    reportLocation = null
+                                } else {
+                                    reportError = "Não foi possível guardar a ocorrência."
+                                }
+                            } catch (_: Exception) {
+                                reportError = "Sem ligação ao servidor."
+                            } finally {
+                                reportSubmitting = false
+                            }
+                        }
+                    }
+                ) {
+                    if (reportSubmitting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Comunicar")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { reportLocation = null }) { Text("Cancelar") }
+            }
+        )
+    }
+
+    selectedBookmark?.let { bookmark ->
+        AlertDialog(
+            onDismissRequest = { selectedBookmark = null },
+            title = { Text(bookmark.type) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(bookmark.description ?: "Sem descrição")
+                    Text("Confirmações: ${bookmark.confirmations}")
+                    bookmarkActionError?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                val response = ApiClient.api.confirmBookmark("Bearer $token", bookmark.id)
+                                if (response.isSuccessful) {
+                                    bookmarks = bookmarks.map {
+                                        if (it.id == bookmark.id) it.copy(confirmations = it.confirmations + 1) else it
+                                    }
+                                    selectedBookmark = null
+                                } else {
+                                    bookmarkActionError = response.body()?.message ?: "Não foi possível confirmar."
+                                }
+                            }
+                        }
+                    ) { Text("Confirmar") }
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                val response = ApiClient.api.reportBookmark(
+                                    authorization = "Bearer $token",
+                                    id = bookmark.id,
+                                    req = BookmarkReportRequest("Informação incorreta")
+                                )
+                                if (response.isSuccessful) selectedBookmark = null
+                                else bookmarkActionError = response.body()?.message ?: "Não foi possível sinalizar."
+                            }
+                        }
+                    ) { Text("Sinalizar") }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            val response = ApiClient.api.deleteBookmark("Bearer $token", bookmark.id)
+                            if (response.isSuccessful) {
+                                bookmarks = bookmarks.filterNot { it.id == bookmark.id }
+                                selectedBookmark = null
+                            } else {
+                                bookmarkActionError = response.body()?.message ?: "Só pode remover as suas ocorrências."
+                            }
+                        }
+                    }
+                ) { Text("Remover") }
+            }
         )
     }
 }
@@ -551,141 +718,6 @@ private fun GeofenceDialog(
             TextButton(onClick = onDismiss) { Text("Cancelar") }
         }
     )
-
-        reportLocation?.let { location ->
-            AlertDialog(
-                onDismissRequest = { reportLocation = null },
-                title = { Text("Comunicar perigo") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Escolha o tipo de ocorrência para este local.")
-                        listOf("ACCIDENT" to "Acidente", "DANGER" to "Perigo", "ROAD_CLOSED" to "Estrada fechada")
-                            .forEach { (value, label) ->
-                                FilterChip(
-                                    selected = reportType == value,
-                                    onClick = { reportType = value },
-                                    label = { Text(label) }
-                                )
-                            }
-                        OutlinedTextField(
-                            value = reportDescription,
-                            onValueChange = { reportDescription = it },
-                            label = { Text("Descrição (opcional)") },
-                            modifier = Modifier.fillMaxWidth(),
-                            maxLines = 3
-                        )
-                        reportError?.let {
-                            Text(it, color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            if (reportSubmitting) return@TextButton
-                            reportSubmitting = true
-                            scope.launch {
-                                try {
-                                    val response = ApiClient.api.createBookmark(
-                                        authorization = "Bearer $token",
-                                        BookmarkRequest(
-                                            type = reportType,
-                                            description = reportDescription.trim().ifBlank { null },
-                                            latitude = location.latitude,
-                                            longitude = location.longitude
-                                        )
-                                    )
-                                    if (response.isSuccessful) {
-                                        response.body()?.let { bookmarks = bookmarks + it }
-                                        reportDescription = ""
-                                        reportLocation = null
-                                    } else {
-                                        reportError = "Não foi possível guardar a ocorrência."
-                                    }
-                                } catch (_: Exception) {
-                                    reportError = "Sem ligação ao servidor."
-                                } finally {
-                                    reportSubmitting = false
-                                }
-                            }
-                        }
-                    ) {
-                        if (reportSubmitting) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        } else {
-                            Text("Comunicar")
-                        }
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { reportLocation = null }) { Text("Cancelar") }
-                }
-            )
-        }
-
-        selectedBookmark?.let { bookmark ->
-            AlertDialog(
-                onDismissRequest = { selectedBookmark = null },
-                title = { Text(bookmark.type) },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(bookmark.description ?: "Sem descrição")
-                        Text("Confirmações: ${bookmark.confirmations}")
-                        bookmarkActionError?.let {
-                            Text(it, color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                },
-                confirmButton = {
-                    Row {
-                        TextButton(
-                            onClick = {
-                                scope.launch {
-                                    val response = ApiClient.api.confirmBookmark("Bearer $token", bookmark.id)
-                                    if (response.isSuccessful) {
-                                        bookmarks = bookmarks.map {
-                                            if (it.id == bookmark.id) it.copy(confirmations = it.confirmations + 1) else it
-                                        }
-                                        selectedBookmark = null
-                                    } else {
-                                        bookmarkActionError = response.body()?.message ?: "Não foi possível confirmar."
-                                    }
-                                }
-                            }
-                        ) { Text("Confirmar") }
-                        TextButton(
-                            onClick = {
-                                scope.launch {
-                                    val response = ApiClient.api.reportBookmark(
-                                        authorization = "Bearer $token",
-                                        id = bookmark.id,
-                                        req = BookmarkReportRequest("Informação incorreta")
-                                    )
-                                    if (response.isSuccessful) selectedBookmark = null
-                                    else bookmarkActionError = response.body()?.message ?: "Não foi possível sinalizar."
-                                }
-                            }
-                        ) { Text("Sinalizar") }
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = {
-                            scope.launch {
-                                val response = ApiClient.api.deleteBookmark("Bearer $token", bookmark.id)
-                                if (response.isSuccessful) {
-                                    bookmarks = bookmarks.filterNot { it.id == bookmark.id }
-                                    selectedBookmark = null
-                                } else {
-                                    bookmarkActionError = response.body()?.message ?: "Só pode remover as suas ocorrências."
-                                }
-                            }
-                        }
-                    ) { Text("Remover") }
-                }
-            )
-        }
-    }
 }
 
 private fun bookmarkHue(type: String): Float = when (type) {

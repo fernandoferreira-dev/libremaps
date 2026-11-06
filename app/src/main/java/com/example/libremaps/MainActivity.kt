@@ -13,6 +13,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.libremaps.ui.theme.LibremapsTheme
 import com.google.android.gms.location.GeofencingClient
 import com.google.android.gms.location.LocationServices
@@ -34,6 +35,7 @@ class MainActivity : ComponentActivity() {
         // 3. Define a UI em Jetpack Compose dentro do ComposeView hospedado no XML
         composeView.setContent {
             LibremapsTheme {
+                val authViewModel: AuthViewModel = viewModel()
                 // rememberSaveable mantém o estado ao rodar o ecrã
                 var loggedIn by rememberSaveable { mutableStateOf(false) }
                 var sessionToken by rememberSaveable { mutableStateOf<String?>(null) }
@@ -44,12 +46,14 @@ class MainActivity : ComponentActivity() {
                             MenuInicial(
                                 token = sessionToken.orEmpty(),
                                 onLogout = {
+                                    authViewModel.logout()
                                     loggedIn = false
                                     sessionToken = null
                                 }
                             )
                         } else {
                             Login(
+                                vm = authViewModel,
                                 onLoggedIn = { token ->
                                     // Login válido -> abre o menu inicial
                                     sessionToken = token

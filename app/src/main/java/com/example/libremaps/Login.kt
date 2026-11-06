@@ -72,7 +72,9 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: (String) -> Unit) {
     val focusManager = LocalFocusManager.current
 
     LaunchedEffect(state.loggedIn, state.token) {
-        state.token?.let(onLoggedIn)
+        if (state.loggedIn) {
+            state.token?.let(onLoggedIn)
+        }
     }
 
     LaunchedEffect(state.registered) {

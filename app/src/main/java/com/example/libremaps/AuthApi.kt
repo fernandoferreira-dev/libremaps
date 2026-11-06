@@ -68,7 +68,7 @@ object ApiClient {
         .build()
 
     val api: AuthApi = Retrofit.Builder()
-        .baseUrl("http://10.21.5.60o:8080/") // Mudem o ip conforme necessário ( 127.0.0.1 se for no emulador )
+        .baseUrl("http://10.0.2.2:8080/") // Mudem o ip conforme necessário ( 127.0.0.1 se for no emulador )
         .client(httpClient)
         .addConverterFactory(GsonConverterFactory.create())
         .build()

@@ -27,6 +27,10 @@ class AuthViewModel : ViewModel() {
         }
     }
 
+    fun logout() {
+        state = AuthUiState()
+    }
+
     fun consumeRegistration() {
         if (state.registered) {
             state = state.copy(registered = false)
