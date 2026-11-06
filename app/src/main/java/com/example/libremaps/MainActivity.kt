@@ -26,6 +26,8 @@ class MainActivity : ComponentActivity() {
         geofencingClient = LocationServices.getGeofencingClient(this)
         enableEdgeToEdge()
 
+        val sessionManager = UserSessionManager(this)
+
         // 1. Infla o layout XML tradicional (activity_main.xml)
         setContentView(R.layout.activity_main)
 
@@ -36,8 +38,9 @@ class MainActivity : ComponentActivity() {
         composeView.setContent {
             LibremapsTheme {
                 val authViewModel: AuthViewModel = viewModel()
-                // rememberSaveable mantém o estado ao rodar o ecrã
-                var loggedIn by rememberSaveable { mutableStateOf(false) }
+
+                // Restaura a sessão guardada, se já tiver efetuado login anteriormente
+                var loggedIn by rememberSaveable { mutableStateOf(sessionManager.isLoggedIn()) }
                 var sessionToken by rememberSaveable { mutableStateOf<String?>(null) }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
@@ -46,7 +49,7 @@ class MainActivity : ComponentActivity() {
                             MenuInicial(
                                 token = sessionToken.orEmpty(),
                                 onLogout = {
-                                    authViewModel.logout()
+                                    authViewModel.logout(sessionManager)
                                     loggedIn = false
                                     sessionToken = null
                                 }

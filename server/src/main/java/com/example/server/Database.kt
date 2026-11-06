@@ -20,6 +20,26 @@ fun configureDatabases() {
     dataSource = HikariDataSource(config)
     dataSource.connection.use { connection ->
         connection.createStatement().use { statement ->
+            // A tabela users já deve existir; isto só a cria se faltar.
+            statement.executeUpdate(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    email VARCHAR(255) NOT NULL UNIQUE,
+                    password_hash VARCHAR(255) NOT NULL
+                )
+                """.trimIndent()
+            )
+            statement.executeUpdate(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    token VARCHAR(64) PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_sessions_user (user_id)
+                )
+                """.trimIndent()
+            )
             statement.executeUpdate(
                 """
                 CREATE TABLE IF NOT EXISTS map_bookmarks (

@@ -28,7 +28,6 @@ import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -117,6 +116,19 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or
                 (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
         PendingIntent.getBroadcast(context, 0, intent, flags)
+    }
+
+    // Termina a sessão no servidor (se possível) e depois no cliente
+    fun performLogout() {
+        scope.launch {
+            try {
+                ApiClient.api.logout("Bearer $token")
+            } catch (_: Exception) {
+                // Mesmo sem ligação, termina a sessão localmente
+            } finally {
+                onLogout()
+            }
+        }
     }
 
     // Regista (ou substitui, pois o ID é o mesmo) o geofence no Google Play Services
@@ -397,8 +409,14 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 }
             }
 
-            // Canto superior direito
+            // Canto superior direito: Perfil e Centrar
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FloatingActionButton(
+                    onClick = { showProfileDialog = true }
+                ) {
+                    Icon(Icons.Default.Person, contentDescription = "Perfil de Utilizador")
+                }
+
                 FloatingActionButton(
                     onClick = {
                         followUser = true
@@ -415,24 +433,17 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 ) {
                     Icon(Icons.Default.MyLocation, contentDescription = "Centrar na minha posição")
                 }
-
-                FloatingActionButton(
-                    onClick = {
-                        scope.launch {
-                            try {
-                                ApiClient.api.logout("Bearer $token")
-                            } catch (_: Exception) {
-                            } finally {
-                                onLogout()
-                            }
-                        }
-                    },
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer
-                ) {
-                    Icon(Icons.Default.Logout, contentDescription = "Terminar sessão")
-                }
             }
+        }
+
+        if (showProfileDialog) {
+            ProfileDialog(
+                onDismiss = { showProfileDialog = false },
+                onLogout = {
+                    showProfileDialog = false
+                    performLogout()
+                }
+            )
         }
 
         ElevatedCard(
@@ -612,14 +623,18 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                     TextButton(
                         onClick = {
                             scope.launch {
-                                val response = ApiClient.api.confirmBookmark("Bearer $token", bookmark.id)
-                                if (response.isSuccessful) {
-                                    bookmarks = bookmarks.map {
-                                        if (it.id == bookmark.id) it.copy(confirmations = it.confirmations + 1) else it
+                                try {
+                                    val response = ApiClient.api.confirmBookmark("Bearer $token", bookmark.id)
+                                    if (response.isSuccessful) {
+                                        bookmarks = bookmarks.map {
+                                            if (it.id == bookmark.id) it.copy(confirmations = it.confirmations + 1) else it
+                                        }
+                                        selectedBookmark = null
+                                    } else {
+                                        bookmarkActionError = response.body()?.message ?: "Não foi possível confirmar."
                                     }
-                                    selectedBookmark = null
-                                } else {
-                                    bookmarkActionError = response.body()?.message ?: "Não foi possível confirmar."
+                                } catch (_: Exception) {
+                                    bookmarkActionError = "Sem ligação ao servidor."
                                 }
                             }
                         }
@@ -627,13 +642,17 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                     TextButton(
                         onClick = {
                             scope.launch {
-                                val response = ApiClient.api.reportBookmark(
-                                    authorization = "Bearer $token",
-                                    id = bookmark.id,
-                                    req = BookmarkReportRequest("Informação incorreta")
-                                )
-                                if (response.isSuccessful) selectedBookmark = null
-                                else bookmarkActionError = response.body()?.message ?: "Não foi possível sinalizar."
+                                try {
+                                    val response = ApiClient.api.reportBookmark(
+                                        authorization = "Bearer $token",
+                                        id = bookmark.id,
+                                        req = BookmarkReportRequest("Informação incorreta")
+                                    )
+                                    if (response.isSuccessful) selectedBookmark = null
+                                    else bookmarkActionError = response.body()?.message ?: "Não foi possível sinalizar."
+                                } catch (_: Exception) {
+                                    bookmarkActionError = "Sem ligação ao servidor."
+                                }
                             }
                         }
                     ) { Text("Sinalizar") }
@@ -643,12 +662,16 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 TextButton(
                     onClick = {
                         scope.launch {
-                            val response = ApiClient.api.deleteBookmark("Bearer $token", bookmark.id)
-                            if (response.isSuccessful) {
-                                bookmarks = bookmarks.filterNot { it.id == bookmark.id }
-                                selectedBookmark = null
-                            } else {
-                                bookmarkActionError = response.body()?.message ?: "Só pode remover as suas ocorrências."
+                            try {
+                                val response = ApiClient.api.deleteBookmark("Bearer $token", bookmark.id)
+                                if (response.isSuccessful) {
+                                    bookmarks = bookmarks.filterNot { it.id == bookmark.id }
+                                    selectedBookmark = null
+                                } else {
+                                    bookmarkActionError = response.body()?.message ?: "Só pode remover as suas ocorrências."
+                                }
+                            } catch (_: Exception) {
+                                bookmarkActionError = "Sem ligação ao servidor."
                             }
                         }
                     }
@@ -749,7 +772,6 @@ private fun LocationInfoPanel(
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Velocidade
             TripMetricItem(
                 icon = Icons.Default.Speed,
                 value = "%.0f".format(speedKmh),
@@ -757,7 +779,6 @@ private fun LocationInfoPanel(
                 label = "Velocidade"
             )
 
-            // Distância
             TripMetricItem(
                 icon = Icons.Default.Route,
                 value = formatDistanceValue(totalDistanceMeters),
@@ -765,7 +786,6 @@ private fun LocationInfoPanel(
                 label = "Distância"
             )
 
-            // Duração
             TripMetricItem(
                 icon = Icons.Default.Timer,
                 value = formatDuration(elapsedTimeMs),

@@ -2,6 +2,7 @@ package com.example.server
 
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.delete
@@ -10,11 +11,12 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import kotlinx.serialization.Serializable
 import org.mindrot.jbcrypt.BCrypt
+import java.security.SecureRandom
 import java.sql.SQLException
 import java.sql.SQLIntegrityConstraintViolationException
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
+import java.sql.Statement
 
+// ---------- Modelos ----------
 @Serializable
 data class AuthRequest(val email: String, val password: String)
 
@@ -25,6 +27,12 @@ data class AuthResponse(
     val token: String? = null,
     val userId: Long? = null
 )
+
+@Serializable
+data class ResetPasswordRequest(val email: String, val newPassword: String)
+
+@Serializable
+data class ChangePasswordRequest(val email: String, val oldPassword: String, val newPassword: String)
 
 @Serializable
 data class BookmarkRequest(
@@ -38,7 +46,7 @@ data class BookmarkRequest(
 data class Bookmark(
     val id: Long,
     val type: String,
-    val description: String?,
+    val description: String? = null,
     val latitude: Double,
     val longitude: Double,
     val confirmations: Int = 0
@@ -47,182 +55,47 @@ data class Bookmark(
 @Serializable
 data class BookmarkReportRequest(val reason: String? = null)
 
-private data class UserCredentials(val id: Long, val passwordHash: String)
+// ---------- Constantes e helpers ----------
+private val ALLOWED_TYPES = setOf("ACCIDENT", "DANGER", "ROAD_CLOSED")
+private const val SESSION_DAYS = 30
+private const val REPORT_HIDE_THRESHOLD = 3 // nº de sinalizações a partir do qual a ocorrência deixa de aparecer
 
-private val sessions = ConcurrentHashMap<String, Long>()
-private val reportTimestamps = ConcurrentHashMap<Long, MutableList<Long>>()
+private val secureRandom = SecureRandom()
 
-private fun authenticatedUserId(call: io.ktor.server.application.ApplicationCall): Long? {
-    val authorization = call.request.headers["Authorization"] ?: return null
-    if (!authorization.startsWith("Bearer ")) return null
-    return sessions[authorization.removePrefix("Bearer ").trim()]
+private fun newToken(): String {
+    val bytes = ByteArray(32)
+    secureRandom.nextBytes(bytes)
+    return bytes.joinToString("") { "%02x".format(it) }
 }
 
-private fun isWithinReportLimit(userId: Long): Boolean {
-    val now = System.currentTimeMillis()
-    val timestamps = reportTimestamps.computeIfAbsent(userId) { mutableListOf() }
-    synchronized(timestamps) {
-        timestamps.removeAll { now - it >= 60_000L }
-        if (timestamps.size >= 10) return false
-        timestamps += now
-        return true
+private fun ApplicationCall.bearerToken(): String? {
+    val header = request.headers["Authorization"] ?: return null
+    if (!header.startsWith("Bearer ", ignoreCase = true)) return null
+    return header.substring(7).trim().ifEmpty { null }
+}
+
+/** Devolve o id do utilizador autenticado ou null se o token for inválido/expirado. */
+private fun ApplicationCall.authenticatedUserId(): Long? {
+    val token = bearerToken() ?: return null
+    return dataSource.connection.use { c ->
+        c.prepareStatement(
+            "SELECT user_id FROM sessions WHERE token = ? AND created_at > (NOW() - INTERVAL $SESSION_DAYS DAY)"
+        ).use { stmt ->
+            stmt.setString(1, token)
+            stmt.executeQuery().use { rs -> if (rs.next()) rs.getLong("user_id") else null }
+        }
     }
 }
 
+private suspend fun ApplicationCall.respondUnauthorized() =
+    respond(HttpStatusCode.Unauthorized, AuthResponse(false, "Sessão inválida ou expirada"))
+
+private fun isDuplicate(e: Exception) =
+    e is SQLIntegrityConstraintViolationException || (e is SQLException && e.errorCode == 1062)
+
 fun Application.configureRouting() {
     routing {
-        get("/bookmarks") {
-            try {
-                val bookmarks = dataSource.connection.use { connection ->
-                    connection.prepareStatement(
-                        "SELECT b.id, b.type, b.description, b.latitude, b.longitude, " +
-                            "(SELECT COUNT(*) FROM bookmark_confirmations c WHERE c.bookmark_id = b.id) AS confirmations " +
-                            "FROM map_bookmarks b " +
-                            "WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL 24 HOUR " +
-                            "ORDER BY created_at DESC"
-                    ).use { statement ->
-                        statement.executeQuery().use { result ->
-                            buildList {
-                                while (result.next()) {
-                                    add(
-                                        Bookmark(
-                                            id = result.getLong("id"),
-                                            type = result.getString("type"),
-                                            description = result.getString("description"),
-                                            latitude = result.getDouble("latitude"),
-                                            longitude = result.getDouble("longitude"),
-                                            confirmations = result.getInt("confirmations")
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                call.respond(bookmarks)
-            } catch (_: Exception) {
-                call.respond(HttpStatusCode.InternalServerError, emptyList<Bookmark>())
-            }
-        }
-
-        post("/bookmarks") {
-            val userId = authenticatedUserId(call)
-                ?: return@post call.respond(HttpStatusCode.Unauthorized, AuthResponse(false, "Sessão inválida"))
-            if (!isWithinReportLimit(userId)) {
-                return@post call.respond(HttpStatusCode.TooManyRequests, AuthResponse(false, "Limite de ocorrências atingido"))
-            }
-            val req = call.receive<BookmarkRequest>()
-            val allowedTypes = setOf("ACCIDENT", "DANGER", "ROAD_CLOSED")
-            if (req.type !in allowedTypes || req.latitude !in -90.0..90.0 || req.longitude !in -180.0..180.0) {
-                return@post call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "Dados da ocorrência inválidos"))
-            }
-
-            val duplicate = dataSource.connection.use { connection ->
-                connection.prepareStatement(
-                    "SELECT id FROM map_bookmarks WHERE user_id = ? AND type = ? " +
-                        "AND ABS(latitude - ?) < 0.0005 AND ABS(longitude - ?) < 0.0005 " +
-                        "AND created_at >= CURRENT_TIMESTAMP - INTERVAL 5 MINUTE LIMIT 1"
-                ).use { statement ->
-                    statement.setLong(1, userId)
-                    statement.setString(2, req.type)
-                    statement.setDouble(3, req.latitude)
-                    statement.setDouble(4, req.longitude)
-                    statement.executeQuery().use { it.next() }
-                }
-            }
-            if (duplicate) {
-                return@post call.respond(HttpStatusCode.Conflict, AuthResponse(false, "Já comunicou esta ocorrência"))
-            }
-
-            try {
-                val bookmark = dataSource.connection.use { connection ->
-                    connection.prepareStatement(
-                        "INSERT INTO map_bookmarks (user_id, type, description, latitude, longitude) VALUES (?, ?, ?, ?, ?)",
-                        java.sql.Statement.RETURN_GENERATED_KEYS
-                    ).use { statement ->
-                        statement.setLong(1, userId)
-                        statement.setString(2, req.type)
-                        statement.setString(3, req.description?.take(255))
-                        statement.setDouble(4, req.latitude)
-                        statement.setDouble(5, req.longitude)
-                        statement.executeUpdate()
-                        statement.generatedKeys.use { keys ->
-                            keys.next()
-                            Bookmark(keys.getLong(1), req.type, req.description?.take(255), req.latitude, req.longitude, 0)
-                        }
-                    }
-                }
-                call.respond(HttpStatusCode.Created, bookmark)
-            } catch (_: Exception) {
-                call.respond(HttpStatusCode.InternalServerError, AuthResponse(false, "Erro ao guardar a ocorrência"))
-            }
-        }
-
-        delete("/bookmarks/{id}") {
-            val userId = authenticatedUserId(call)
-                ?: return@delete call.respond(HttpStatusCode.Unauthorized, AuthResponse(false, "Sessão inválida"))
-            val bookmarkId = call.parameters["id"]?.toLongOrNull()
-                ?: return@delete call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "ID inválido"))
-
-            val deleted = dataSource.connection.use { connection ->
-                connection.prepareStatement("DELETE FROM map_bookmarks WHERE id = ? AND user_id = ?").use { statement ->
-                    statement.setLong(1, bookmarkId)
-                    statement.setLong(2, userId)
-                    statement.executeUpdate()
-                }
-            }
-            if (deleted == 0) {
-                call.respond(HttpStatusCode.NotFound, AuthResponse(false, "Ocorrência não encontrada"))
-            } else {
-                call.respond(AuthResponse(true, "Ocorrência removida"))
-            }
-        }
-
-        post("/bookmarks/{id}/reports") {
-            val userId = authenticatedUserId(call)
-                ?: return@post call.respond(HttpStatusCode.Unauthorized, AuthResponse(false, "Sessão inválida"))
-            val bookmarkId = call.parameters["id"]?.toLongOrNull()
-                ?: return@post call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "ID inválido"))
-            val req = call.receive<BookmarkReportRequest>()
-
-            try {
-                dataSource.connection.use { connection ->
-                    connection.prepareStatement(
-                        "INSERT INTO bookmark_reports (bookmark_id, user_id, reason) VALUES (?, ?, ?)"
-                    ).use { statement ->
-                        statement.setLong(1, bookmarkId)
-                        statement.setLong(2, userId)
-                        statement.setString(3, req.reason?.take(255))
-                        statement.executeUpdate()
-                    }
-                }
-                call.respond(HttpStatusCode.Created, AuthResponse(true, "Ocorrência sinalizada"))
-            } catch (e: SQLIntegrityConstraintViolationException) {
-                call.respond(HttpStatusCode.Conflict, AuthResponse(false, "Já sinalizou esta ocorrência"))
-            }
-        }
-
-        post("/bookmarks/{id}/confirm") {
-            val userId = authenticatedUserId(call)
-                ?: return@post call.respond(HttpStatusCode.Unauthorized, AuthResponse(false, "Sessão inválida"))
-            val bookmarkId = call.parameters["id"]?.toLongOrNull()
-                ?: return@post call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "ID inválido"))
-            try {
-                dataSource.connection.use { connection ->
-                    connection.prepareStatement(
-                        "INSERT INTO bookmark_confirmations (bookmark_id, user_id) VALUES (?, ?)"
-                    ).use { statement ->
-                        statement.setLong(1, bookmarkId)
-                        statement.setLong(2, userId)
-                        statement.executeUpdate()
-                    }
-                }
-                call.respond(HttpStatusCode.Created, AuthResponse(true, "Ocorrência confirmada"))
-            } catch (e: SQLIntegrityConstraintViolationException) {
-                call.respond(HttpStatusCode.Conflict, AuthResponse(false, "Já confirmou esta ocorrência"))
-            }
-        }
-
+        // ---------- Autenticação ----------
         post("/register") {
             val req = call.receive<AuthRequest>()
             val email = req.email.trim().lowercase()
@@ -245,7 +118,7 @@ fun Application.configureRouting() {
                 }
                 call.respond(HttpStatusCode.Created, AuthResponse(true, "Conta criada"))
             } catch (e: Exception) {
-                if (e is SQLIntegrityConstraintViolationException || (e is SQLException && e.errorCode == 1062)) {
+                if (isDuplicate(e)) {
                     call.respond(HttpStatusCode.Conflict, AuthResponse(false, "Email já registado"))
                 } else {
                     call.respond(
@@ -261,27 +134,34 @@ fun Application.configureRouting() {
             val email = req.email.trim().lowercase()
 
             try {
-                val credentials = dataSource.connection.use { c ->
+                val user = dataSource.connection.use { c ->
                     c.prepareStatement("SELECT id, password_hash FROM users WHERE email = ?").use { stmt ->
                         stmt.setString(1, email)
                         stmt.executeQuery().use { rs ->
-                            if (rs.next()) {
-                                UserCredentials(rs.getLong("id"), rs.getString("password_hash"))
-                            } else null
+                            if (rs.next()) rs.getLong("id") to rs.getString("password_hash") else null
                         }
                     }
                 }
 
-                val passwordValid = credentials != null && try {
-                    BCrypt.checkpw(req.password, credentials.passwordHash)
+                val passwordValid = user != null && try {
+                    BCrypt.checkpw(req.password, user.second)
                 } catch (_: Exception) {
                     false
                 }
 
-                if (passwordValid) {
-                    val token = UUID.randomUUID().toString()
-                    sessions[token] = credentials.id
-                    call.respond(HttpStatusCode.OK, AuthResponse(true, "Login OK", token, credentials.id))
+                if (user != null && passwordValid) {
+                    val token = newToken()
+                    dataSource.connection.use { c ->
+                        c.prepareStatement("INSERT INTO sessions (token, user_id) VALUES (?, ?)").use { stmt ->
+                            stmt.setString(1, token)
+                            stmt.setLong(2, user.first)
+                            stmt.executeUpdate()
+                        }
+                    }
+                    call.respond(
+                        HttpStatusCode.OK,
+                        AuthResponse(true, "Login OK", token = token, userId = user.first)
+                    )
                 } else {
                     call.respond(HttpStatusCode.Unauthorized, AuthResponse(false, "Credenciais inválidas"))
                 }
@@ -294,11 +174,296 @@ fun Application.configureRouting() {
         }
 
         post("/logout") {
-            val authorization = call.request.headers["Authorization"]
-            if (authorization?.startsWith("Bearer ") == true) {
-                sessions.remove(authorization.removePrefix("Bearer ").trim())
+            val token = call.bearerToken()
+                ?: return@post call.respondUnauthorized()
+            try {
+                dataSource.connection.use { c ->
+                    c.prepareStatement("DELETE FROM sessions WHERE token = ?").use { stmt ->
+                        stmt.setString(1, token)
+                        stmt.executeUpdate()
+                    }
+                }
+                call.respond(HttpStatusCode.OK, AuthResponse(true, "Sessão terminada"))
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    AuthResponse(false, "Erro no servidor ao terminar sessão")
+                )
             }
-            call.respond(AuthResponse(true, "Logout OK"))
+        }
+
+        post("/reset-password") {
+            val req = call.receive<ResetPasswordRequest>()
+            val email = req.email.trim().lowercase()
+
+            if (req.newPassword.length < 8) {
+                return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    AuthResponse(false, "A nova palavra-passe deve ter pelo menos 8 caracteres")
+                )
+            }
+
+            try {
+                val userId = dataSource.connection.use { c ->
+                    c.prepareStatement("SELECT id FROM users WHERE email = ?").use { stmt ->
+                        stmt.setString(1, email)
+                        stmt.executeQuery().use { rs -> if (rs.next()) rs.getLong("id") else null }
+                    }
+                } ?: return@post call.respond(
+                    HttpStatusCode.NotFound,
+                    AuthResponse(false, "Email não encontrado")
+                )
+
+                val newHash = BCrypt.hashpw(req.newPassword, BCrypt.gensalt())
+                dataSource.connection.use { c ->
+                    c.prepareStatement("UPDATE users SET password_hash = ? WHERE id = ?").use { stmt ->
+                        stmt.setString(1, newHash)
+                        stmt.setLong(2, userId)
+                        stmt.executeUpdate()
+                    }
+                    // Invalida as sessões existentes
+                    c.prepareStatement("DELETE FROM sessions WHERE user_id = ?").use { stmt ->
+                        stmt.setLong(1, userId)
+                        stmt.executeUpdate()
+                    }
+                }
+                call.respond(HttpStatusCode.OK, AuthResponse(true, "Palavra-passe redefinida com sucesso"))
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    AuthResponse(false, "Erro no servidor ao redefinir palavra-passe: ${e.message}")
+                )
+            }
+        }
+
+        post("/change-password") {
+            val req = call.receive<ChangePasswordRequest>()
+            val email = req.email.trim().lowercase()
+
+            if (req.newPassword.length < 8) {
+                return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    AuthResponse(false, "A nova palavra-passe deve ter pelo menos 8 caracteres")
+                )
+            }
+
+            try {
+                val user = dataSource.connection.use { c ->
+                    c.prepareStatement("SELECT id, password_hash FROM users WHERE email = ?").use { stmt ->
+                        stmt.setString(1, email)
+                        stmt.executeQuery().use { rs ->
+                            if (rs.next()) rs.getLong("id") to rs.getString("password_hash") else null
+                        }
+                    }
+                }
+
+                val validOld = user != null && try {
+                    BCrypt.checkpw(req.oldPassword, user.second)
+                } catch (_: Exception) {
+                    false
+                }
+
+                if (user == null || !validOld) {
+                    return@post call.respond(
+                        HttpStatusCode.Unauthorized,
+                        AuthResponse(false, "Palavra-passe atual incorreta")
+                    )
+                }
+
+                val newHash = BCrypt.hashpw(req.newPassword, BCrypt.gensalt())
+                dataSource.connection.use { c ->
+                    c.prepareStatement("UPDATE users SET password_hash = ? WHERE id = ?").use { stmt ->
+                        stmt.setString(1, newHash)
+                        stmt.setLong(2, user.first)
+                        stmt.executeUpdate()
+                    }
+                }
+                call.respond(HttpStatusCode.OK, AuthResponse(true, "Palavra-passe alterada com sucesso"))
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    AuthResponse(false, "Erro no servidor ao alterar palavra-passe: ${e.message}")
+                )
+            }
+        }
+
+        // ---------- Bookmarks ----------
+        get("/bookmarks") {
+            try {
+                val list = dataSource.connection.use { c ->
+                    c.prepareStatement(
+                        """
+                        SELECT b.id, b.type, b.description, b.latitude, b.longitude,
+                               (SELECT COUNT(*) FROM bookmark_confirmations bc WHERE bc.bookmark_id = b.id) AS confirmations
+                        FROM map_bookmarks b
+                        WHERE (SELECT COUNT(*) FROM bookmark_reports br WHERE br.bookmark_id = b.id) < ?
+                        ORDER BY b.created_at DESC
+                        """.trimIndent()
+                    ).use { stmt ->
+                        stmt.setInt(1, REPORT_HIDE_THRESHOLD)
+                        stmt.executeQuery().use { rs ->
+                            buildList {
+                                while (rs.next()) {
+                                    add(
+                                        Bookmark(
+                                            id = rs.getLong("id"),
+                                            type = rs.getString("type"),
+                                            description = rs.getString("description"),
+                                            latitude = rs.getDouble("latitude"),
+                                            longitude = rs.getDouble("longitude"),
+                                            confirmations = rs.getInt("confirmations")
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                call.respond(HttpStatusCode.OK, list)
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    AuthResponse(false, "Erro no servidor ao obter ocorrências")
+                )
+            }
+        }
+
+        post("/bookmarks") {
+            val userId = call.authenticatedUserId() ?: return@post call.respondUnauthorized()
+            val req = call.receive<BookmarkRequest>()
+
+            if (req.type !in ALLOWED_TYPES ||
+                req.latitude !in -90.0..90.0 ||
+                req.longitude !in -180.0..180.0
+            ) {
+                return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    AuthResponse(false, "Tipo ou coordenadas inválidos")
+                )
+            }
+            val description = req.description?.trim()?.take(255)?.ifEmpty { null }
+
+            try {
+                val id = dataSource.connection.use { c ->
+                    c.prepareStatement(
+                        "INSERT INTO map_bookmarks (user_id, type, description, latitude, longitude) VALUES (?, ?, ?, ?, ?)",
+                        Statement.RETURN_GENERATED_KEYS
+                    ).use { stmt ->
+                        stmt.setLong(1, userId)
+                        stmt.setString(2, req.type)
+                        stmt.setString(3, description)
+                        stmt.setDouble(4, req.latitude)
+                        stmt.setDouble(5, req.longitude)
+                        stmt.executeUpdate()
+                        stmt.generatedKeys.use { rs -> if (rs.next()) rs.getLong(1) else error("Sem id gerado") }
+                    }
+                }
+                call.respond(
+                    HttpStatusCode.Created,
+                    Bookmark(id, req.type, description, req.latitude, req.longitude, 0)
+                )
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    AuthResponse(false, "Erro no servidor ao guardar ocorrência")
+                )
+            }
+        }
+
+        delete("/bookmarks/{id}") {
+            val userId = call.authenticatedUserId() ?: return@delete call.respondUnauthorized()
+            val id = call.parameters["id"]?.toLongOrNull()
+                ?: return@delete call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "Id inválido"))
+
+            try {
+                val deleted = dataSource.connection.use { c ->
+                    val rows = c.prepareStatement("DELETE FROM map_bookmarks WHERE id = ? AND user_id = ?").use { stmt ->
+                        stmt.setLong(1, id)
+                        stmt.setLong(2, userId)
+                        stmt.executeUpdate()
+                    }
+                    if (rows > 0) {
+                        c.prepareStatement("DELETE FROM bookmark_reports WHERE bookmark_id = ?").use { s ->
+                            s.setLong(1, id); s.executeUpdate()
+                        }
+                        c.prepareStatement("DELETE FROM bookmark_confirmations WHERE bookmark_id = ?").use { s ->
+                            s.setLong(1, id); s.executeUpdate()
+                        }
+                    }
+                    rows > 0
+                }
+                if (deleted) {
+                    call.respond(HttpStatusCode.OK, AuthResponse(true, "Ocorrência removida"))
+                } else {
+                    call.respond(
+                        HttpStatusCode.Forbidden,
+                        AuthResponse(false, "Só pode remover as suas ocorrências")
+                    )
+                }
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    AuthResponse(false, "Erro no servidor ao remover ocorrência")
+                )
+            }
+        }
+
+        post("/bookmarks/{id}/reports") {
+            val userId = call.authenticatedUserId() ?: return@post call.respondUnauthorized()
+            val id = call.parameters["id"]?.toLongOrNull()
+                ?: return@post call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "Id inválido"))
+            val req = runCatching { call.receive<BookmarkReportRequest>() }.getOrDefault(BookmarkReportRequest())
+
+            try {
+                dataSource.connection.use { c ->
+                    c.prepareStatement(
+                        "INSERT INTO bookmark_reports (bookmark_id, user_id, reason) VALUES (?, ?, ?)"
+                    ).use { stmt ->
+                        stmt.setLong(1, id)
+                        stmt.setLong(2, userId)
+                        stmt.setString(3, req.reason?.trim()?.take(255))
+                        stmt.executeUpdate()
+                    }
+                }
+                call.respond(HttpStatusCode.Created, AuthResponse(true, "Ocorrência sinalizada"))
+            } catch (e: Exception) {
+                if (isDuplicate(e)) {
+                    call.respond(HttpStatusCode.Conflict, AuthResponse(false, "Já sinalizou esta ocorrência"))
+                } else {
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        AuthResponse(false, "Erro no servidor ao sinalizar ocorrência")
+                    )
+                }
+            }
+        }
+
+        post("/bookmarks/{id}/confirm") {
+            val userId = call.authenticatedUserId() ?: return@post call.respondUnauthorized()
+            val id = call.parameters["id"]?.toLongOrNull()
+                ?: return@post call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "Id inválido"))
+
+            try {
+                dataSource.connection.use { c ->
+                    c.prepareStatement(
+                        "INSERT INTO bookmark_confirmations (bookmark_id, user_id) VALUES (?, ?)"
+                    ).use { stmt ->
+                        stmt.setLong(1, id)
+                        stmt.setLong(2, userId)
+                        stmt.executeUpdate()
+                    }
+                }
+                call.respond(HttpStatusCode.Created, AuthResponse(true, "Ocorrência confirmada"))
+            } catch (e: Exception) {
+                if (isDuplicate(e)) {
+                    call.respond(HttpStatusCode.Conflict, AuthResponse(false, "Já confirmou esta ocorrência"))
+                } else {
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        AuthResponse(false, "Erro no servidor ao confirmar ocorrência")
+                    )
+                }
+            }
         }
     }
 }
