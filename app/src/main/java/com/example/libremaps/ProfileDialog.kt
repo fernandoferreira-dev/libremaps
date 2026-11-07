@@ -1,6 +1,8 @@
 package com.example.libremaps
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -37,6 +39,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -69,6 +72,9 @@ fun ProfileDialog(
     var profileBusy by remember { mutableStateOf(false) }
     var profileMessage by remember { mutableStateOf<String?>(null) }
     var profileError by remember { mutableStateOf<String?>(null) }
+
+    // Estado da seleção de foto (Câmara vs Galeria)
+    var showImageSourceDialog by remember { mutableStateOf(false) }
 
     // Alterar palavra-passe
     var showChangePassword by remember { mutableStateOf(false) }
@@ -139,6 +145,46 @@ fun ProfileDialog(
         }
     }
 
+    // Captura de imagem através da câmara
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            scope.launch {
+                profileBusy = true
+                profileError = null
+                profileMessage = null
+                try {
+                    val bytes = prepareAvatar(bitmap)
+                    val res = ApiClient.api.uploadAvatar(
+                        auth,
+                        bytes.toRequestBody("image/jpeg".toMediaType())
+                    )
+                    if (res.isSuccessful) {
+                        avatar = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        profileMessage = "Foto atualizada com sucesso."
+                    } else {
+                        profileError = "Não foi possível guardar a foto (${res.code()})."
+                    }
+                } catch (_: Exception) {
+                    profileError = "Sem ligação ao servidor."
+                } finally {
+                    profileBusy = false
+                }
+            }
+        }
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if(granted) {
+            cameraLauncher.launch(null)
+        }
+        else {
+            profileError = "É necessária a permissão da câmara para tirar fotos."
+        }
+    }
+
     val trimmedName = nameInput.trim()
     val nameValid = trimmedName.length in 2..30
     val nameChanged = trimmedName != savedName
@@ -151,6 +197,45 @@ fun ProfileDialog(
             delay(150)
             scrollState.animateScrollTo(scrollState.maxValue)
         }
+    }
+
+    // Diálogo para escolha da origem da imagem (Câmara vs Galeria)
+    if (showImageSourceDialog) {
+        AlertDialog(
+            onDismissRequest = { showImageSourceDialog = false },
+            title = { Text("Alterar Foto de Perfil") },
+            text = { Text("Como pretende escolher a sua foto?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showImageSourceDialog = false
+                        val hasPermission = ContextCompat.checkSelfPermission(
+                            context, Manifest.permission.CAMERA
+                        ) == PackageManager.PERMISSION_GRANTED
+
+                        if (hasPermission) {
+                            cameraLauncher.launch(null)
+                        } else {
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        }
+                    }
+                ) {
+                    Text("Tirar Foto")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showImageSourceDialog = false
+                        imagePicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    }
+                ) {
+                    Text("Escolher da Galeria")
+                }
+            }
+        )
     }
 
     Dialog(
@@ -192,9 +277,7 @@ fun ProfileDialog(
                             .size(96.dp)
                             .clip(CircleShape)
                             .clickable(enabled = !profileBusy) {
-                                imagePicker.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
+                                showImageSourceDialog = true
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -228,11 +311,7 @@ fun ProfileDialog(
                 }
 
                 TextButton(
-                    onClick = {
-                        imagePicker.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
-                    },
+                    onClick = { showImageSourceDialog = true },
                     enabled = !profileBusy,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 ) {
@@ -466,7 +545,25 @@ fun ProfileDialog(
     }
 }
 
-/** Lê a imagem, recorta ao centro num quadrado, reduz para 256x256 e comprime em JPEG. */
+/** Recorta a bitmap ao centro num quadrado, reduz para 256x256 e comprime em JPEG. */
+private suspend fun prepareAvatar(bitmap: Bitmap): ByteArray = withContext(Dispatchers.IO) {
+    val side = minOf(bitmap.width, bitmap.height)
+    val square = Bitmap.createBitmap(
+        bitmap,
+        (bitmap.width - side) / 2,
+        (bitmap.height - side) / 2,
+        side,
+        side
+    )
+    val scaled = Bitmap.createScaledBitmap(square, AVATAR_SIZE_PX, AVATAR_SIZE_PX, true)
+
+    ByteArrayOutputStream().use { out ->
+        scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        out.toByteArray()
+    }
+}
+
+/** Lê a imagem a partir de uma Uri, recorta ao centro num quadrado, reduz para 256x256 e comprime em JPEG. */
 private suspend fun prepareAvatar(context: Context, uri: Uri): ByteArray? = withContext(Dispatchers.IO) {
     try {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -479,20 +576,7 @@ private suspend fun prepareAvatar(context: Context, uri: Uri): ByteArray? = with
             BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
         } ?: return@withContext null
 
-        val side = minOf(decoded.width, decoded.height)
-        val square = Bitmap.createBitmap(
-            decoded,
-            (decoded.width - side) / 2,
-            (decoded.height - side) / 2,
-            side,
-            side
-        )
-        val scaled = Bitmap.createScaledBitmap(square, AVATAR_SIZE_PX, AVATAR_SIZE_PX, true)
-
-        ByteArrayOutputStream().use { out ->
-            scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
-            out.toByteArray()
-        }
+        prepareAvatar(decoded)
     } catch (_: Exception) {
         null
     }
