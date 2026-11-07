@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [BookmarkEntity::class], version = 1, exportSchema = false)
+@Database(entities = [BookmarkEntity::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     // fornece o acesso aos metodos do DAO de bookmarks
@@ -25,7 +25,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "libremaps_database.db" // Nome do ficheiro SQLite criado no dispositivo
-                ).build()
+                )
+                .fallbackToDestructiveMigration(dropAllTables = true)
+                .build()
                 INSTANCE = dbinstance
                 dbinstance
             }

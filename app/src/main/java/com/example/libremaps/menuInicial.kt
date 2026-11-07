@@ -68,6 +68,8 @@ private const val MS_TO_KMH = 3.6
 private const val GEOFENCE_ID = "user_geofence"
 private const val DEFAULT_GEOFENCE_RADIUS_M = 150f
 
+private const val BOOKMARK_TTL_MS = 48L * 60 * 60 * 1000
+
 private fun hasBackgroundLocationPermission(context: Context): Boolean =
     Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
             ContextCompat.checkSelfPermission(
@@ -88,8 +90,13 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     val db = remember { AppDatabase.getDatabase(context) }
     val bookmarkDao = remember { db.bookmarkDao() }
     val localBookmarkEntities by bookmarkDao.getAllBookmarks().collectAsState(initial = emptyList())
-    val bookmarks = remember(localBookmarkEntities) { localBookmarkEntities.map { it.toModel() } }
-
+    val bookmarks = remember(localBookmarkEntities) {
+        val now = System.currentTimeMillis()
+        localBookmarkEntities
+            .filter { now - it.createdAtMs < BOOKMARK_TTL_MS }
+            .map { it.toModel() }
+    }
+    
     var currentLocation by remember { mutableStateOf<Location?>(null) }
     var followUser by remember { mutableStateOf(true) }
     var reportLocation by remember { mutableStateOf<LatLng?>(null) }
