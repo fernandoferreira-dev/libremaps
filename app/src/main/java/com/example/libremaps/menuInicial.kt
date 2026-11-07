@@ -61,6 +61,11 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.filled.AcUnit
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.WaterDrop
+import androidx.compose.material.icons.filled.WbSunny
 
 private const val DEFAULT_ZOOM = 17f
 private const val MS_TO_KMH = 3.6
@@ -96,7 +101,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
             .filter { now - it.createdAtMs < BOOKMARK_TTL_MS }
             .map { it.toModel() }
     }
-    
+
     var currentLocation by remember { mutableStateOf<Location?>(null) }
     var followUser by remember { mutableStateOf(true) }
     var reportLocation by remember { mutableStateOf<LatLng?>(null) }
@@ -123,6 +128,9 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var dialogRadius by remember { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
     var hasBackgroundPermission by remember { mutableStateOf(hasBackgroundLocationPermission(context)) }
     var pendingGeofence by remember { mutableStateOf<Pair<LatLng, Float>?>(null) }
+
+    var temperatureC by remember { mutableStateOf<Double?>(null) }
+    var weatherCode by remember { mutableStateOf<Int?>(null) }
 
     val geofencingClient = remember { LocationServices.getGeofencingClient(context) }
     val geofencePendingIntent = remember {
