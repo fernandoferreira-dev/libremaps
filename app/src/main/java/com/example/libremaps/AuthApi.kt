@@ -59,7 +59,8 @@ data class BookmarkEntity(
     val description: String?,
     val latitude: Double,
     val longitude: Double,
-    val confirmations: Int = 0
+    val confirmations: Int = 0,
+    val createdAtMs: Long = 0
 )
 
 data class Bookmark(
@@ -68,7 +69,8 @@ data class Bookmark(
     val description: String?,
     val latitude: Double,
     val longitude: Double,
-    val confirmations: Int = 0
+    val confirmations: Int = 0, 
+    val createdAtMs: Long = 0
 )
 
 fun Bookmark.toEntity(): BookmarkEntity = BookmarkEntity(id, type, description, latitude, longitude, confirmations)

@@ -65,10 +65,10 @@ data class ProfileResponse(val email: String, val displayName: String? = null, v
 @Serializable
 data class UpdateProfileRequest(val displayName: String)
 
-// ---------- Constantes e helpers ----------
 private val ALLOWED_TYPES = setOf("ACCIDENT", "DANGER", "ROAD_CLOSED")
 private const val SESSION_DAYS = 30
-private const val REPORT_HIDE_THRESHOLD = 3 // nº de sinalizações a partir do qual a ocorrência deixa de aparecer
+private const val REPORT_HIDE_THRESHOLD = 3
+private const val BOOKMARK_TTL_HOURS = 48
 
 private val secureRandom = SecureRandom()
 
@@ -304,9 +304,11 @@ fun Application.configureRouting() {
                     c.prepareStatement(
                         """
                         SELECT b.id, b.type, b.description, b.latitude, b.longitude,
-                               (SELECT COUNT(*) FROM bookmark_confirmations bc WHERE bc.bookmark_id = b.id) AS confirmations
+                            UNIX_TIMESTAMP(b.created_at) * 1000 AS created_at_ms,
+                            (SELECT COUNT(*) FROM bookmark_confirmations bc WHERE bc.bookmark_id = b.id) AS confirmations
                         FROM map_bookmarks b
-                        WHERE (SELECT COUNT(*) FROM bookmark_reports br WHERE br.bookmark_id = b.id) < ?
+                        WHERE b.created_at > (NOW() - INTERVAL $BOOKMARK_TTL_HOURS HOUR)
+                        AND (SELECT COUNT(*) FROM bookmark_reports br WHERE br.bookmark_id = b.id) < ?
                         ORDER BY b.created_at DESC
                         """.trimIndent()
                     ).use { stmt ->
