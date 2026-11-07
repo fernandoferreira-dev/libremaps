@@ -15,6 +15,10 @@ import java.security.SecureRandom
 import java.sql.SQLException
 import java.sql.SQLIntegrityConstraintViolationException
 import java.sql.Statement
+import io.ktor.http.ContentType
+import io.ktor.server.response.respondBytes
+import io.ktor.server.routing.put
+
 
 // ---------- Modelos ----------
 @Serializable
@@ -54,6 +58,12 @@ data class Bookmark(
 
 @Serializable
 data class BookmarkReportRequest(val reason: String? = null)
+
+@Serializable
+data class ProfileResponse(val email: String, val displayName: String? = null, val hasAvatar: Boolean = false)
+
+@Serializable
+data class UpdateProfileRequest(val displayName: String)
 
 // ---------- Constantes e helpers ----------
 private val ALLOWED_TYPES = setOf("ACCIDENT", "DANGER", "ROAD_CLOSED")
@@ -463,6 +473,96 @@ fun Application.configureRouting() {
                         AuthResponse(false, "Erro no servidor ao confirmar ocorrência")
                     )
                 }
+            }
+        }
+
+        // ---------- Perfil ----------
+        get("/profile") {
+            val userId = call.authenticatedUserId() ?: return@get call.respondUnauthorized()
+            try {
+                val profile = dataSource.connection.use { c ->
+                    c.prepareStatement(
+                        "SELECT email, display_name, (avatar IS NOT NULL) AS has_avatar FROM users WHERE id = ?"
+                    ).use { stmt ->
+                        stmt.setLong(1, userId)
+                        stmt.executeQuery().use { rs ->
+                            if (rs.next()) ProfileResponse(
+                                email = rs.getString("email"),
+                                displayName = rs.getString("display_name"),
+                                hasAvatar = rs.getBoolean("has_avatar")
+                            ) else null
+                        }
+                    }
+                }
+                if (profile != null) call.respond(HttpStatusCode.OK, profile)
+                else call.respond(HttpStatusCode.NotFound, AuthResponse(false, "Utilizador não encontrado"))
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, AuthResponse(false, "Erro no servidor ao obter perfil"))
+            }
+        }
+
+        put("/profile") {
+            val userId = call.authenticatedUserId() ?: return@put call.respondUnauthorized()
+            val req = call.receive<UpdateProfileRequest>()
+            val name = req.displayName.trim()
+
+            if (name.length !in 2..30) {
+                return@put call.respond(
+                    HttpStatusCode.BadRequest,
+                    AuthResponse(false, "O nome deve ter entre 2 e 30 caracteres")
+                )
+            }
+            try {
+                dataSource.connection.use { c ->
+                    c.prepareStatement("UPDATE users SET display_name = ? WHERE id = ?").use { stmt ->
+                        stmt.setString(1, name)
+                        stmt.setLong(2, userId)
+                        stmt.executeUpdate()
+                    }
+                }
+                call.respond(HttpStatusCode.OK, AuthResponse(true, "Nome atualizado"))
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, AuthResponse(false, "Erro no servidor ao atualizar nome"))
+            }
+        }
+
+        put("/profile/avatar") {
+            val userId = call.authenticatedUserId() ?: return@put call.respondUnauthorized()
+            val bytes = call.receive<ByteArray>()
+
+            if (bytes.isEmpty() || bytes.size > 512 * 1024) {
+                return@put call.respond(
+                    HttpStatusCode.BadRequest,
+                    AuthResponse(false, "Imagem inválida ou demasiado grande (máx. 512 KB)")
+                )
+            }
+            try {
+                dataSource.connection.use { c ->
+                    c.prepareStatement("UPDATE users SET avatar = ? WHERE id = ?").use { stmt ->
+                        stmt.setBytes(1, bytes)
+                        stmt.setLong(2, userId)
+                        stmt.executeUpdate()
+                    }
+                }
+                call.respond(HttpStatusCode.OK, AuthResponse(true, "Foto atualizada"))
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, AuthResponse(false, "Erro no servidor ao guardar foto"))
+            }
+        }
+
+        get("/profile/avatar") {
+            val userId = call.authenticatedUserId() ?: return@get call.respondUnauthorized()
+            try {
+                val bytes = dataSource.connection.use { c ->
+                    c.prepareStatement("SELECT avatar FROM users WHERE id = ?").use { stmt ->
+                        stmt.setLong(1, userId)
+                        stmt.executeQuery().use { rs -> if (rs.next()) rs.getBytes("avatar") else null }
+                    }
+                }
+                if (bytes != null) call.respondBytes(bytes, ContentType.Image.JPEG)
+                else call.respond(HttpStatusCode.NotFound, AuthResponse(false, "Sem foto de perfil"))
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, AuthResponse(false, "Erro no servidor ao obter foto"))
             }
         }
     }

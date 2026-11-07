@@ -107,8 +107,9 @@ class AuthViewModel : ViewModel() {
                         )
 
                         else -> {
-                            sessionManager?.saveSession(email.trim())
-                            AuthUiState(loggedIn = true, token = body?.token)
+                            val token = body?.token.orEmpty()
+                            sessionManager?.saveSession(email.trim(), token)
+                            AuthUiState(loggedIn = true, token = token)
                         }
                     }
                 } else {

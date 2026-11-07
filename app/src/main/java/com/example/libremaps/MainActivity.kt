@@ -28,20 +28,20 @@ class MainActivity : ComponentActivity() {
 
         val sessionManager = UserSessionManager(this)
 
-        // 1. Infla o layout XML tradicional (activity_main.xml)
+        //Infla o layout XML tradicional (activity_main.xml)
         setContentView(R.layout.activity_main)
 
-        // 2. Obtém a referência do ComposeView presente no XML
+        // Obtém a referência do ComposeView presente no XML
         val composeView = findViewById<ComposeView>(R.id.compose_view)
 
-        // 3. Define a UI em Jetpack Compose dentro do ComposeView hospedado no XML
+        // Define a UI em Jetpack Compose dentro do ComposeView hospedado no XML
         composeView.setContent {
             LibremapsTheme {
                 val authViewModel: AuthViewModel = viewModel()
 
-                // Restaura a sessão guardada, se já tiver efetuado login anteriormente
+                // Restaura a sessão guardada, se já tiver login anteriormente
                 var loggedIn by rememberSaveable { mutableStateOf(sessionManager.isLoggedIn()) }
-                var sessionToken by rememberSaveable { mutableStateOf<String?>(null) }
+                var sessionToken by rememberSaveable { mutableStateOf<String?>(sessionManager.getToken()) }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {

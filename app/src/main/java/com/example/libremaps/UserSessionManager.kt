@@ -10,12 +10,14 @@ class UserSessionManager(context: Context) {
         private const val PREF_NAME = "libremaps_session"
         private const val KEY_IS_LOGGED_IN = "is_logged_in"
         private const val KEY_USER_EMAIL = "user_email"
+        private const val KEY_USER_TOKEN = "user_token"
     }
 
-    fun saveSession(email: String) {
+    fun saveSession(email: String, token: String) {
         prefs.edit()
             .putBoolean(KEY_IS_LOGGED_IN, true)
             .putString(KEY_USER_EMAIL, email)
+            .putString(KEY_USER_TOKEN, token)
             .apply()
     }
 
@@ -26,10 +28,14 @@ class UserSessionManager(context: Context) {
     }
 
     fun isLoggedIn(): Boolean {
-        return prefs.getBoolean(KEY_IS_LOGGED_IN, false)
+        return prefs.getBoolean(KEY_IS_LOGGED_IN, false) && !getToken().isNullOrBlank()
     }
 
     fun getUserEmail(): String? {
         return prefs.getString(KEY_USER_EMAIL, null)
+    }
+
+    fun getToken(): String? {
+        return prefs.getString(KEY_USER_TOKEN, null)
     }
 }

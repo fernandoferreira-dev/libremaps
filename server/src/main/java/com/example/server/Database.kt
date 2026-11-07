@@ -31,6 +31,14 @@ fun configureDatabases() {
                 """.trimIndent()
             )
             statement.executeUpdate(
+                "ALTER TABLE users " +
+                        "ADD COLUMN IF NOT EXISTS " +
+                        "display_name VARCHAR(50) NULL")
+            statement.executeUpdate(
+                "ALTER TABLE users " +
+                        "ADD COLUMN IF NOT EXISTS " +
+                        "avatar MEDIUMBLOB NULL")
+            statement.executeUpdate(
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
                     token VARCHAR(64) PRIMARY KEY,

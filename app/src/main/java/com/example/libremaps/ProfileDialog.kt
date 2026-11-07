@@ -1,11 +1,23 @@
 package com.example.libremaps
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Visibility
@@ -14,24 +26,51 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.ByteArrayOutputStream
+
+private const val AVATAR_SIZE_PX = 256
 
 @Composable
 fun ProfileDialog(
+    token: String,
     vm: AuthViewModel = viewModel(),
     onDismiss: () -> Unit,
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val sessionManager = remember { UserSessionManager(context) }
-    val userEmail = sessionManager.getUserEmail() ?: "Utilizador"
+    val auth = "Bearer $token"
 
+    // Dados do perfil
+    var email by remember { mutableStateOf(sessionManager.getUserEmail() ?: "Utilizador") }
+    var savedName by remember { mutableStateOf("") }
+    var nameInput by remember { mutableStateOf("") }
+    var avatar by remember { mutableStateOf<Bitmap?>(null) }
+    var profileLoading by remember { mutableStateOf(true) }
+    var profileBusy by remember { mutableStateOf(false) }
+    var profileMessage by remember { mutableStateOf<String?>(null) }
+    var profileError by remember { mutableStateOf<String?>(null) }
+
+    // Alterar palavra-passe
     var showChangePassword by remember { mutableStateOf(false) }
     var oldPassword by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
@@ -40,33 +79,223 @@ fun ProfileDialog(
 
     val state = vm.state
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    modifier = Modifier.size(40.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.AccountCircle,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+    // Carrega nome, email e foto do servidor
+    LaunchedEffect(token) {
+        try {
+            val res = ApiClient.api.getProfile(auth)
+            if (res.isSuccessful) {
+                res.body()?.let { p ->
+                    email = p.email
+                    savedName = p.displayName.orEmpty()
+                    nameInput = savedName
+                    if (p.hasAvatar) {
+                        val avatarRes = ApiClient.api.getAvatar(auth)
+                        if (avatarRes.isSuccessful) {
+                            val bytes = withContext(Dispatchers.IO) { avatarRes.body()?.bytes() }
+                            avatar = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                        }
                     }
                 }
-                Spacer(modifier = Modifier.width(12.dp))
+            } else {
+                profileError = "Não foi possível carregar o perfil."
+            }
+        } catch (_: Exception) {
+            profileError = "Sem ligação ao servidor."
+        } finally {
+            profileLoading = false
+        }
+    }
+
+    // Seletor de imagem da galeria (não precisa de permissões)
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            profileBusy = true
+            profileError = null
+            profileMessage = null
+            try {
+                val bytes = prepareAvatar(context, uri)
+                if (bytes == null) {
+                    profileError = "Não foi possível ler a imagem."
+                } else {
+                    val res = ApiClient.api.uploadAvatar(
+                        auth,
+                        bytes.toRequestBody("image/jpeg".toMediaType())
+                    )
+                    if (res.isSuccessful) {
+                        avatar = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        profileMessage = "Foto atualizada."
+                    } else {
+                        profileError = "Não foi possível guardar a foto (${res.code()})."
+                    }
+                }
+            } catch (_: Exception) {
+                profileError = "Sem ligação ao servidor."
+            } finally {
+                profileBusy = false
+            }
+        }
+    }
+
+    val trimmedName = nameInput.trim()
+    val nameValid = trimmedName.length in 2..30
+    val nameChanged = trimmedName != savedName
+
+    val scrollState = rememberScrollState()
+
+    // Auto-scroll suave para o fundo quando o utilizador abre o formulário de alterar palavra-passe
+    LaunchedEffect(showChangePassword) {
+        if (showChangePassword) {
+            delay(150)
+            scrollState.animateScrollTo(scrollState.maxValue)
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .wrapContentHeight()
+                .padding(vertical = 16.dp)
+                .imePadding(),
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+                    .verticalScroll(scrollState)
+            ) {
+                // Título
                 Text(
                     text = "Perfil de Utilizador",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
-            }
-        },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth()) {
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Foto de perfil
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(96.dp)
+                            .clip(CircleShape)
+                            .clickable(enabled = !profileBusy) {
+                                imagePicker.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val bmp = avatar
+                        if (bmp != null) {
+                            Image(
+                                bitmap = bmp.asImageBitmap(),
+                                contentDescription = "Foto de perfil",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Surface(
+                                modifier = Modifier.fillMaxSize(),
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.AccountCircle,
+                                        contentDescription = "Sem foto de perfil",
+                                        modifier = Modifier.size(56.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                        if (profileBusy) {
+                            CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
+                        }
+                    }
+                }
+
+                TextButton(
+                    onClick = {
+                        imagePicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    enabled = !profileBusy,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                ) {
+                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Alterar foto")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Nome de utilizador
+                OutlinedTextField(
+                    value = nameInput,
+                    onValueChange = {
+                        if (it.length <= 30) nameInput = it
+                        profileMessage = null
+                        profileError = null
+                    },
+                    label = { Text("Nome de utilizador") },
+                    singleLine = true,
+                    enabled = !profileLoading,
+                    isError = nameInput.isNotBlank() && !nameValid,
+                    supportingText = {
+                        if (nameInput.isNotBlank() && !nameValid) Text("Entre 2 e 30 caracteres")
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Button(
+                    onClick = {
+                        scope.launch {
+                            profileBusy = true
+                            profileError = null
+                            profileMessage = null
+                            try {
+                                val res = ApiClient.api.updateProfile(auth, UpdateProfileRequest(trimmedName))
+                                if (res.isSuccessful) {
+                                    savedName = trimmedName
+                                    nameInput = trimmedName
+                                    profileMessage = "Nome atualizado."
+                                } else {
+                                    profileError = "Não foi possível guardar o nome (${res.code()})."
+                                }
+                            } catch (_: Exception) {
+                                profileError = "Sem ligação ao servidor."
+                            } finally {
+                                profileBusy = false
+                            }
+                        }
+                    },
+                    enabled = !profileBusy && !profileLoading && nameValid && nameChanged,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Guardar nome")
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Email (só leitura)
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
@@ -80,7 +309,7 @@ fun ProfileDialog(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = userEmail,
+                            text = email,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -88,19 +317,25 @@ fun ProfileDialog(
                     }
                 }
 
+                profileMessage?.let {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                }
+                profileError?.let {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+
                 Spacer(modifier = Modifier.height(16.dp))
 
+                // Alterar palavra-passe
                 if (!showChangePassword) {
                     OutlinedButton(
                         onClick = { showChangePassword = true },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Alterar Palavra-passe")
                     }
@@ -135,7 +370,7 @@ fun ProfileDialog(
                             IconButton(onClick = { passwordVisible = !passwordVisible }) {
                                 Icon(
                                     imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = null
+                                    contentDescription = if (passwordVisible) "Ocultar palavra-passe" else "Mostrar palavra-passe"
                                 )
                             }
                         },
@@ -157,19 +392,18 @@ fun ProfileDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End
                     ) {
-                        TextButton(onClick = { showChangePassword = false }) {
-                            Text("Cancelar")
-                        }
+                        TextButton(onClick = { showChangePassword = false }) { Text("Cancelar") }
+                        Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             onClick = {
                                 vm.changePassword(
-                                    email = userEmail,
+                                    email = email,
                                     oldPassword = oldPassword,
                                     newPassword = newPassword,
                                     confirmPassword = confirmPassword,
@@ -181,29 +415,19 @@ fun ProfileDialog(
                                     }
                                 )
                             },
-                            enabled = !state.loading && oldPassword.isNotBlank() && newPassword.isNotBlank() && confirmPassword.isNotBlank()
-                        ) {
-                            Text("Guardar")
-                        }
+                            enabled = !state.loading && oldPassword.isNotBlank() &&
+                                    newPassword.isNotBlank() && confirmPassword.isNotBlank()
+                        ) { Text("Guardar") }
                     }
                 }
 
-                if (state.error != null) {
+                state.error?.let {
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = state.error!!,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
-
-                if (state.successMessage != null) {
+                state.successMessage?.let {
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = state.successMessage!!,
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -216,27 +440,60 @@ fun ProfileDialog(
                         onLogout()
                         onDismiss()
                     },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    ),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Logout,
-                        contentDescription = "Terminar Sessão",
+                        contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Terminar Sessão")
                 }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Fechar")
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Fechar")
+                }
             }
         }
-    )
+    }
+}
+
+/** Lê a imagem, recorta ao centro num quadrado, reduz para 256x256 e comprime em JPEG. */
+private suspend fun prepareAvatar(context: Context, uri: Uri): ByteArray? = withContext(Dispatchers.IO) {
+    try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+
+        var sample = 1
+        while (bounds.outWidth / sample > 1024 || bounds.outHeight / sample > 1024) sample *= 2
+
+        val decoded = context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+        } ?: return@withContext null
+
+        val side = minOf(decoded.width, decoded.height)
+        val square = Bitmap.createBitmap(
+            decoded,
+            (decoded.width - side) / 2,
+            (decoded.height - side) / 2,
+            side,
+            side
+        )
+        val scaled = Bitmap.createScaledBitmap(square, AVATAR_SIZE_PX, AVATAR_SIZE_PX, true)
+
+        ByteArrayOutputStream().use { out ->
+            scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            out.toByteArray()
+        }
+    } catch (_: Exception) {
+        null
+    }
 }

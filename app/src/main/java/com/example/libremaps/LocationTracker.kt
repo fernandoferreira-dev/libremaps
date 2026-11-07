@@ -5,20 +5,29 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
+import android.os.Looper
 import androidx.core.content.ContextCompat
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.Granularity
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 
 class LocationTracker(private val context: Context) {
 
-    private val locationManager =
-        context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    private val fusedLocationClient: FusedLocationProviderClient =
+        LocationServices.getFusedLocationProviderClient(context)
 
-    private var listener: LocationListener? = null
+    private var locationCallback: LocationCallback? = null
 
     companion object {
-        private const val MIN_TIME_MS = 1000L
-        private const val MIN_DISTANCE_METERS = 1f
+        // Intervalo de 3 segundos com mínimo de 2s e 3m de deslocamento
+        // reduz significativamente o consumo de bateria comparado com a escuta contínua de 1s
+        private const val UPDATE_INTERVAL_MS = 3000L
+        private const val MIN_UPDATE_INTERVAL_MS = 2000L
+        private const val MIN_DISTANCE_METERS = 3f
     }
 
     fun hasPermission(): Boolean =
@@ -34,31 +43,39 @@ class LocationTracker(private val context: Context) {
         if (!hasPermission()) return false
         stop()
 
-        val newListener = object : LocationListener {
-            override fun onLocationChanged(location: Location) {
-                onLocationChanged(location)
+        // 1. Obtém a última localização conhecida para resposta imediata sem aguardar pelo lock de GPS
+        fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
+            loc?.let(onLocationChanged)
+        }
+
+        // 2. Configura a requisição com Fused Location Provider (combinando GPS, Wi-Fi e sensores)
+        val locationRequest = LocationRequest.Builder(
+            Priority.PRIORITY_HIGH_ACCURACY,
+            UPDATE_INTERVAL_MS
+        ).apply {
+            setMinUpdateIntervalMillis(MIN_UPDATE_INTERVAL_MS)
+            setMinUpdateDistanceMeters(MIN_DISTANCE_METERS)
+            setGranularity(Granularity.GRANULARITY_PERMISSION_LEVEL)
+            setWaitForAccurateLocation(false)
+        }.build()
+
+        val callback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                result.lastLocation?.let(onLocationChanged)
             }
-
-            @Deprecated("Deprecated in Java")
-            override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
-            override fun onProviderEnabled(provider: String) {}
-            override fun onProviderDisabled(provider: String) {}
         }
-        listener = newListener
+        locationCallback = callback
 
-        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-        providers.filter { locationManager.isProviderEnabled(it) }.forEach { provider ->
-            locationManager.requestLocationUpdates(
-                provider, MIN_TIME_MS, MIN_DISTANCE_METERS, newListener
-            )
-            // Mostra a última posição conhecida
-            locationManager.getLastKnownLocation(provider)?.let(onLocationChanged)
-        }
+        fusedLocationClient.requestLocationUpdates(
+            locationRequest,
+            callback,
+            Looper.getMainLooper()
+        )
         return true
     }
 
     fun stop() {
-        listener?.let { locationManager.removeUpdates(it) }
-        listener = null
+        locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
+        locationCallback = null
     }
 }

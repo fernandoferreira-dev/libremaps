@@ -438,6 +438,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
 
         if (showProfileDialog) {
             ProfileDialog(
+                token = token,
                 onDismiss = { showProfileDialog = false },
                 onLogout = {
                     showProfileDialog = false

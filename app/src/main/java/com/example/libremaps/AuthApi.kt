@@ -1,6 +1,8 @@
 package com.example.libremaps
 
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody
+import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -9,6 +11,7 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import java.util.concurrent.TimeUnit
 
@@ -29,6 +32,15 @@ data class ChangePasswordRequest(
     val oldPassword: String,
     val newPassword: String
 )
+
+// ---------- Perfil ----------
+data class ProfileResponse(
+    val email: String,
+    val displayName: String? = null,
+    val hasAvatar: Boolean = false
+)
+
+data class UpdateProfileRequest(val displayName: String)
 
 // ---------- Bookmarks ----------
 data class BookmarkRequest(
@@ -57,6 +69,26 @@ interface AuthApi {
     @POST("change-password") suspend fun changePassword(@Body req: ChangePasswordRequest): Response<AuthResponse>
     @POST("logout") suspend fun logout(@Header("Authorization") authorization: String): Response<AuthResponse>
 
+    // Perfil
+    @GET("profile") suspend fun getProfile(
+        @Header("Authorization") authorization: String
+    ): Response<ProfileResponse>
+
+    @PUT("profile") suspend fun updateProfile(
+        @Header("Authorization") authorization: String,
+        @Body req: UpdateProfileRequest
+    ): Response<AuthResponse>
+
+    @PUT("profile/avatar") suspend fun uploadAvatar(
+        @Header("Authorization") authorization: String,
+        @Body body: RequestBody
+    ): Response<AuthResponse>
+
+    @GET("profile/avatar") suspend fun getAvatar(
+        @Header("Authorization") authorization: String
+    ): Response<ResponseBody>
+
+    // Bookmarks
     @GET("bookmarks") suspend fun getBookmarks(): Response<List<Bookmark>>
 
     @POST("bookmarks") suspend fun createBookmark(
@@ -83,9 +115,10 @@ interface AuthApi {
 
 object ApiClient {
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     val api: AuthApi = Retrofit.Builder()
