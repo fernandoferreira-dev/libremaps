@@ -1,4 +1,4 @@
-package com.example.libremaps
+package com.example.libremaps.feature.map
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -16,7 +16,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddLocationAlt
 import androidx.compose.material.icons.filled.EditLocationAlt
@@ -28,7 +27,6 @@ import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -38,34 +36,40 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.libremaps.core.database.AppDatabase
+import com.example.libremaps.core.database.toEntity
+import com.example.libremaps.core.database.toModel
+import com.example.libremaps.core.location.GeofenceBroadcastReceiver
+import com.example.libremaps.core.location.LocationTracker
+import com.example.libremaps.core.model.Bookmark
+import com.example.libremaps.core.model.BookmarkReportRequest
+import com.example.libremaps.core.model.BookmarkRequest
+import com.example.libremaps.core.network.ApiClient
+import com.example.libremaps.feature.profile.ProfileDialog
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
-import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
+import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.CameraMoveStartedReason
 import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.GoogleMap
-import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MapProperties
 import com.google.maps.android.compose.MapUiSettings
+import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import androidx.compose.material.icons.filled.AcUnit
-import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.WaterDrop
-import androidx.compose.material.icons.filled.WbSunny
 
 private const val DEFAULT_ZOOM = 17f
 private const val MS_TO_KMH = 3.6
@@ -91,7 +95,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var hasPermission by remember { mutableStateOf(tracker.hasPermission()) }
     var permissionDenied by remember { mutableStateOf(false) }
 
-    // Base de dados local Room
     val db = remember { AppDatabase.getDatabase(context) }
     val bookmarkDao = remember { db.bookmarkDao() }
     val localBookmarkEntities by bookmarkDao.getAllBookmarks().collectAsState(initial = emptyList())
@@ -113,14 +116,12 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var bookmarkActionError by remember { mutableStateOf<String?>(null) }
     var showProfileDialog by remember { mutableStateOf(false) }
 
-    // Estados da Viagem (Velocidade, Distância e Duração)
     var isTripActive by remember { mutableStateOf(true) }
     var totalDistanceMeters by remember { mutableFloatStateOf(0f) }
     var tripStartTimeMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var elapsedTimeMs by remember { mutableLongStateOf(0L) }
     var previousLocation by remember { mutableStateOf<Location?>(null) }
 
-    // Estados do Geofence
     var geofenceCenter by rememberSaveable { mutableStateOf<LatLng?>(null) }
     var geofenceRadius by rememberSaveable { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
     var showGeofenceDialog by remember { mutableStateOf(false) }
@@ -128,9 +129,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var dialogRadius by remember { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
     var hasBackgroundPermission by remember { mutableStateOf(hasBackgroundLocationPermission(context)) }
     var pendingGeofence by remember { mutableStateOf<Pair<LatLng, Float>?>(null) }
-
-    var temperatureC by remember { mutableStateOf<Double?>(null) }
-    var weatherCode by remember { mutableStateOf<Int?>(null) }
 
     val geofencingClient = remember { LocationServices.getGeofencingClient(context) }
     val geofencePendingIntent = remember {
@@ -140,20 +138,17 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         PendingIntent.getBroadcast(context, 0, intent, flags)
     }
 
-    // Termina a sessão no servidor (se possível) e depois no cliente
     fun performLogout() {
         scope.launch {
             try {
                 ApiClient.api.logout("Bearer $token")
             } catch (_: Exception) {
-                // Mesmo sem ligação, termina a sessão localmente
             } finally {
                 onLogout()
             }
         }
     }
 
-    // Regista (ou substitui, pois o ID é o mesmo) o geofence no Google Play Services
     @SuppressLint("MissingPermission")
     fun registerGeofence(center: LatLng, radius: Float) {
         val geofence = Geofence.Builder()
@@ -199,7 +194,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         permissionDenied = !hasPermission
     }
 
-    // Permissão de localização em segundo plano (pedida à parte, depois da permissão normal)
     val backgroundPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -238,18 +232,15 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                     bookmarkDao.insertAll(remoteList.map { it.toEntity() })
                 }
             } catch (_: Exception) {
-                // Em caso de falha de rede/offline, mantém os bookmarks guardados no room sqlite
             }
             delay(30_000L)
         }
     }
 
-    // Estado da câmara
     val cameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(LatLng(39.7436, -8.8071), DEFAULT_ZOOM)
     }
 
-    // Se o utilizador mexer no mapa com o dedo, deixa de o seguir
     LaunchedEffect(cameraPositionState) {
         snapshotFlow {
             cameraPositionState.isMoving to cameraPositionState.cameraMoveStartedReason
@@ -258,7 +249,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         }
     }
 
-    // Cronómetro da viagem
     LaunchedEffect(isTripActive, tripStartTimeMs) {
         while (isTripActive) {
             elapsedTimeMs = System.currentTimeMillis() - tripStartTimeMs
@@ -266,13 +256,11 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         }
     }
 
-    // Cálculo da distância percorrida
     LaunchedEffect(currentLocation) {
         currentLocation?.let { newLoc ->
             if (isTripActive) {
                 previousLocation?.let { oldLoc ->
                     val distance = oldLoc.distanceTo(newLoc)
-                    // Filtra pequenas oscilações de ruído GPS (< 2 metros ou baixa precisão)
                     if (distance >= 2.0f && newLoc.accuracy < 30f) {
                         totalDistanceMeters += distance
                     }
@@ -282,12 +270,10 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         }
     }
 
-    // GPS só enquanto o ecrã está visível
     DisposableEffect(lifecycleOwner, hasPermission) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
-                    // O utilizador pode ter concedido a permissão em segundo plano nas definições
                     hasBackgroundPermission = hasBackgroundLocationPermission(context)
                     if (hasPermission) tracker.start { currentLocation = it }
                 }
@@ -307,7 +293,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         }
     }
 
-    // Move a câmara quando chega uma nova localização
     LaunchedEffect(currentLocation) {
         currentLocation?.let { location ->
             if (followUser) {
@@ -333,7 +318,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 zoomControlsEnabled = false
             )
         ) {
-            // Desenha o geofence ativo no mapa
             geofenceCenter?.let { center ->
                 Circle(
                     center = center,
@@ -360,7 +344,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
 
         val geofenceActive = geofenceCenter != null
 
-        // Barra de controlo superior com statusBarsPadding
         Row(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -370,7 +353,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Canto superior esquerdo: Botão Único de Geofence e Localização
             Box {
                 FloatingActionButton(
                     onClick = { showLocationMenu = true },
@@ -435,7 +417,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 }
             }
 
-            // Canto superior direito
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FloatingActionButton(
                     onClick = {
@@ -533,15 +514,12 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     }
 
     if (showGeofenceDialog) {
-        //abrir um dialog quando o user carrega no botao das geofences
         GeofenceDialog(
-            //tamanho da geofence
             radius = dialogRadius,
             onRadiusChange = { dialogRadius = it },
             isActive = geofenceCenter != null,
             onConfirm = {
-                //loc = location, nome simplificado no codigo.
-                val loc = currentLocation //localização atual do dispositivo do utilizador
+                val loc = currentLocation
                 showGeofenceDialog = false
                 if (loc != null) {
                     val center = LatLng(loc.latitude, loc.longitude)
@@ -711,7 +689,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
 
 @Composable
 private fun GeofenceDialog(
-    //vars do dialogo de definição do geofence
     radius: Float,
     onRadiusChange: (Float) -> Unit,
     isActive: Boolean,
@@ -728,7 +705,6 @@ private fun GeofenceDialog(
         title = { Text(if (isActive) "Redefinir geofence" else "Definir geofence") },
         text = {
             Column {
-                //frontend do dialogo
                 Text(
                     text = "Cria uma zona circular centrada na sua posição atual. " +
                             "Será notificado ao entrar e ao sair.",
@@ -794,13 +770,11 @@ private fun LocationInfoPanel(
             .fillMaxWidth()
             .padding(16.dp)
     ) {
-        // Métricas principais: Velocidade | Distância | Duração
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Velocidade
             TripMetricItem(
                 icon = Icons.Default.Speed,
                 value = "%.0f".format(speedKmh),
@@ -808,7 +782,6 @@ private fun LocationInfoPanel(
                 label = "Velocidade"
             )
 
-            // Distância
             TripMetricItem(
                 icon = Icons.Default.Route,
                 value = formatDistanceValue(totalDistanceMeters),
@@ -816,7 +789,6 @@ private fun LocationInfoPanel(
                 label = "Distância"
             )
 
-            // Duração
             TripMetricItem(
                 icon = Icons.Default.Timer,
                 value = formatDuration(elapsedTimeMs),
@@ -829,13 +801,11 @@ private fun LocationInfoPanel(
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Controlos da viagem e Coordenadas
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Botões de Controlo (Pausar/Iniciar e Reiniciar)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -856,7 +826,6 @@ private fun LocationInfoPanel(
                 }
             }
 
-            // Coordenadas GPS e Precisão
             Column(horizontalAlignment = Alignment.End) {
                 Text(
                     text = "%.4f, %.4f".format(location.latitude, location.longitude),

@@ -1,18 +1,11 @@
-package com.example.libremaps
+package com.example.libremaps.core.network
 
-import com.google.gson.annotations.SerializedName
+import com.example.libremaps.core.model.WeatherResponse
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
-
-data class WeatherResponse(val current: CurrentWeather? = null)
-
-data class CurrentWeather(
-    @SerializedName("temperature_2m") val temperature: Double,
-    @SerializedName("weather_code") val weatherCode: Int
-)
 
 interface WeatherApi {
     @GET("v1/forecast")

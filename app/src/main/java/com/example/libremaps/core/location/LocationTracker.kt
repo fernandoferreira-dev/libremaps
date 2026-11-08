@@ -1,4 +1,4 @@
-package com.example.libremaps
+package com.example.libremaps.core.location
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -23,8 +23,6 @@ class LocationTracker(private val context: Context) {
     private var locationCallback: LocationCallback? = null
 
     companion object {
-        // Intervalo de 3 segundos com mínimo de 2s e 3m de deslocamento
-        // reduz significativamente o consumo de bateria comparado com a escuta contínua de 1s
         private const val UPDATE_INTERVAL_MS = 3000L
         private const val MIN_UPDATE_INTERVAL_MS = 2000L
         private const val MIN_DISTANCE_METERS = 3f
@@ -43,12 +41,10 @@ class LocationTracker(private val context: Context) {
         if (!hasPermission()) return false
         stop()
 
-        // 1. Obtém a última localização conhecida para resposta imediata sem aguardar pelo lock de GPS
         fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
             loc?.let(onLocationChanged)
         }
 
-        // 2. Configura a requisição com Fused Location Provider (combinando GPS, Wi-Fi e sensores)
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
             UPDATE_INTERVAL_MS

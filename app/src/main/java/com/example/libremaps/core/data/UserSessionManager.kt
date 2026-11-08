@@ -1,4 +1,4 @@
-package com.example.libremaps
+package com.example.libremaps.core.data
 
 import android.content.Context
 import android.content.SharedPreferences

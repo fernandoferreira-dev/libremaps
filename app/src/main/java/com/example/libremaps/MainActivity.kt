@@ -14,6 +14,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.libremaps.core.data.UserSessionManager
+import com.example.libremaps.feature.auth.AuthViewModel
+import com.example.libremaps.feature.auth.Login
+import com.example.libremaps.feature.map.MenuInicial
 import com.example.libremaps.ui.theme.LibremapsTheme
 import com.google.android.gms.location.GeofencingClient
 import com.google.android.gms.location.LocationServices
@@ -28,18 +32,14 @@ class MainActivity : ComponentActivity() {
 
         val sessionManager = UserSessionManager(this)
 
-        //Infla o layout XML tradicional (activity_main.xml)
         setContentView(R.layout.activity_main)
 
-        // Obtém a referência do ComposeView presente no XML
         val composeView = findViewById<ComposeView>(R.id.compose_view)
 
-        // Define a UI em Jetpack Compose dentro do ComposeView hospedado no XML
         composeView.setContent {
             LibremapsTheme {
                 val authViewModel: AuthViewModel = viewModel()
 
-                // Restaura a sessão guardada, se já tiver login anteriormente
                 var loggedIn by rememberSaveable { mutableStateOf(sessionManager.isLoggedIn()) }
                 var sessionToken by rememberSaveable { mutableStateOf<String?>(sessionManager.getToken()) }
 
@@ -58,7 +58,6 @@ class MainActivity : ComponentActivity() {
                             Login(
                                 vm = authViewModel,
                                 onLoggedIn = { token ->
-                                    // Login válido -> abre o menu inicial
                                     sessionToken = token
                                     loggedIn = true
                                 }

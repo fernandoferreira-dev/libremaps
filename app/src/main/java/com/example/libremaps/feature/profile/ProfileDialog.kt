@@ -1,4 +1,4 @@
-package com.example.libremaps
+package com.example.libremaps.feature.profile
 
 import android.Manifest
 import android.content.Context
@@ -41,6 +41,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.libremaps.core.data.UserSessionManager
+import com.example.libremaps.core.model.UpdateProfileRequest
+import com.example.libremaps.core.network.ApiClient
+import com.example.libremaps.feature.auth.AuthViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -63,7 +67,6 @@ fun ProfileDialog(
     val sessionManager = remember { UserSessionManager(context) }
     val auth = "Bearer $token"
 
-    // Dados do perfil
     var email by remember { mutableStateOf(sessionManager.getUserEmail() ?: "Utilizador") }
     var savedName by remember { mutableStateOf("") }
     var nameInput by remember { mutableStateOf("") }
@@ -73,10 +76,8 @@ fun ProfileDialog(
     var profileMessage by remember { mutableStateOf<String?>(null) }
     var profileError by remember { mutableStateOf<String?>(null) }
 
-    // Estado da seleção de foto (Câmara vs Galeria)
     var showImageSourceDialog by remember { mutableStateOf(false) }
 
-    // Alterar palavra-passe
     var showChangePassword by remember { mutableStateOf(false) }
     var oldPassword by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
@@ -85,7 +86,6 @@ fun ProfileDialog(
 
     val state = vm.state
 
-    // Carrega nome, email e foto do servidor
     LaunchedEffect(token) {
         try {
             val res = ApiClient.api.getProfile(auth)
@@ -112,7 +112,6 @@ fun ProfileDialog(
         }
     }
 
-    // Seletor de imagem da galeria (não precisa de permissões)
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
@@ -145,7 +144,6 @@ fun ProfileDialog(
         }
     }
 
-    // Captura de imagem através da câmara
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicturePreview()
     ) { bitmap ->
@@ -174,13 +172,13 @@ fun ProfileDialog(
             }
         }
     }
+
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if(granted) {
+        if (granted) {
             cameraLauncher.launch(null)
-        }
-        else {
+        } else {
             profileError = "É necessária a permissão da câmara para tirar fotos."
         }
     }
@@ -191,7 +189,6 @@ fun ProfileDialog(
 
     val scrollState = rememberScrollState()
 
-    // Auto-scroll suave para o fundo quando o utilizador abre o formulário de alterar palavra-passe
     LaunchedEffect(showChangePassword) {
         if (showChangePassword) {
             delay(150)
@@ -199,7 +196,6 @@ fun ProfileDialog(
         }
     }
 
-    // Diálogo para escolha da origem da imagem (Câmara vs Galeria)
     if (showImageSourceDialog) {
         AlertDialog(
             onDismissRequest = { showImageSourceDialog = false },
@@ -258,7 +254,6 @@ fun ProfileDialog(
                     .padding(24.dp)
                     .verticalScroll(scrollState)
             ) {
-                // Título
                 Text(
                     text = "Perfil de Utilizador",
                     style = MaterialTheme.typography.titleMedium,
@@ -267,7 +262,6 @@ fun ProfileDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Foto de perfil
                 Box(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center
@@ -322,7 +316,6 @@ fun ProfileDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Nome de utilizador
                 OutlinedTextField(
                     value = nameInput,
                     onValueChange = {
@@ -374,7 +367,6 @@ fun ProfileDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Email (só leitura)
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
@@ -407,7 +399,6 @@ fun ProfileDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Alterar palavra-passe
                 if (!showChangePassword) {
                     OutlinedButton(
                         onClick = { showChangePassword = true },
@@ -545,7 +536,6 @@ fun ProfileDialog(
     }
 }
 
-/** Recorta a bitmap ao centro num quadrado, reduz para 256x256 e comprime em JPEG. */
 private suspend fun prepareAvatar(bitmap: Bitmap): ByteArray = withContext(Dispatchers.IO) {
     val side = minOf(bitmap.width, bitmap.height)
     val square = Bitmap.createBitmap(
@@ -563,7 +553,6 @@ private suspend fun prepareAvatar(bitmap: Bitmap): ByteArray = withContext(Dispa
     }
 }
 
-/** Lê a imagem a partir de uma Uri, recorta ao centro num quadrado, reduz para 256x256 e comprime em JPEG. */
 private suspend fun prepareAvatar(context: Context, uri: Uri): ByteArray? = withContext(Dispatchers.IO) {
     try {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }

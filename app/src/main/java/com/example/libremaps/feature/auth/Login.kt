@@ -1,4 +1,4 @@
-package com.example.libremaps
+package com.example.libremaps.feature.auth
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.libremaps.core.data.UserSessionManager
 
 @Composable
 fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: (String) -> Unit) {

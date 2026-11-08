@@ -1,4 +1,4 @@
-package com.example.libremaps
+package com.example.libremaps.feature.auth
 
 import android.util.Patterns
 import androidx.compose.runtime.getValue
@@ -6,6 +6,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.libremaps.core.data.UserSessionManager
+import com.example.libremaps.core.data.repository.AuthRepository
+import com.example.libremaps.core.model.AuthRequest
+import com.example.libremaps.core.model.AuthResponse
+import com.example.libremaps.core.model.ChangePasswordRequest
+import com.example.libremaps.core.model.ResetPasswordRequest
 import com.google.gson.Gson
 import kotlinx.coroutines.launch
 
@@ -20,7 +26,9 @@ data class AuthUiState(
     val passwordChangedSuccess: Boolean = false
 )
 
-class AuthViewModel : ViewModel() {
+class AuthViewModel(
+    private val repository: AuthRepository = AuthRepository()
+) : ViewModel() {
     var state by mutableStateOf(AuthUiState())
         private set
 
@@ -48,7 +56,6 @@ class AuthViewModel : ViewModel() {
         }
     }
 
-    // ---------- Validações ----------
     private fun validateEmail(email: String): String? {
         val trimmed = email.trim()
         if (trimmed.isEmpty()) return "O email é obrigatório"
@@ -61,7 +68,6 @@ class AuthViewModel : ViewModel() {
         return null
     }
 
-    // ---------- Login / Registo ----------
     fun submit(
         email: String,
         password: String,
@@ -90,7 +96,7 @@ class AuthViewModel : ViewModel() {
             state = AuthUiState(loading = true)
             try {
                 val req = AuthRequest(email.trim(), password)
-                val res = if (isRegister) ApiClient.api.register(req) else ApiClient.api.login(req)
+                val res = if (isRegister) repository.register(req) else repository.login(req)
                 state = if (res.isSuccessful) {
                     val body = res.body()
                     when {
@@ -128,7 +134,6 @@ class AuthViewModel : ViewModel() {
         }
     }
 
-    // ---------- Recuperar palavra-passe ----------
     fun resetPassword(email: String, newPassword: String, confirmPassword: String) {
         val emailError = validateEmail(email)
         if (emailError != null) {
@@ -151,7 +156,7 @@ class AuthViewModel : ViewModel() {
             state = AuthUiState(loading = true)
             try {
                 val req = ResetPasswordRequest(email.trim(), newPassword)
-                val res = ApiClient.api.resetPassword(req)
+                val res = repository.resetPassword(req)
                 state = if (res.isSuccessful) {
                     AuthUiState(
                         passwordResetSuccess = true,
@@ -171,7 +176,6 @@ class AuthViewModel : ViewModel() {
         }
     }
 
-    // ---------- Alterar palavra-passe ----------
     fun changePassword(
         email: String,
         oldPassword: String,
@@ -194,7 +198,7 @@ class AuthViewModel : ViewModel() {
             state = AuthUiState(loading = true)
             try {
                 val req = ChangePasswordRequest(email.trim(), oldPassword, newPassword)
-                val res = ApiClient.api.changePassword(req)
+                val res = repository.changePassword(req)
                 if (res.isSuccessful) {
                     state = AuthUiState(
                         passwordChangedSuccess = true,
@@ -215,7 +219,6 @@ class AuthViewModel : ViewModel() {
         }
     }
 
-    // ---------- Logout ----------
     fun logout(sessionManager: UserSessionManager? = null) {
         sessionManager?.clearSession()
         state = AuthUiState()
