@@ -44,6 +44,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.libremaps.core.database.AppDatabase
+import com.example.libremaps.core.database.BookmarkEntity
 import com.example.libremaps.core.database.toEntity
 import com.example.libremaps.core.database.toModel
 import com.example.libremaps.core.location.GeofenceBroadcastReceiver
@@ -52,6 +53,7 @@ import com.example.libremaps.core.model.Bookmark
 import com.example.libremaps.core.model.BookmarkReportRequest
 import com.example.libremaps.core.model.BookmarkRequest
 import com.example.libremaps.core.network.ApiClient
+import com.example.libremaps.core.network.WeatherClient
 import com.example.libremaps.feature.profile.ProfileDialog
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingRequest
@@ -70,15 +72,12 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-<<<<<<< HEAD:app/src/main/java/com/example/libremaps/feature/map/menuInicial.kt
-=======
 import kotlin.math.roundToInt
 import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.WbSunny
->>>>>>> 01a72e4 (add: wheather api display):app/src/main/java/com/example/libremaps/menuInicial.kt
 
 private const val DEFAULT_ZOOM = 17f
 private const val MS_TO_KMH = 3.6
@@ -139,16 +138,12 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var hasBackgroundPermission by remember { mutableStateOf(hasBackgroundLocationPermission(context)) }
     var pendingGeofence by remember { mutableStateOf<Pair<LatLng, Float>?>(null) }
 
-<<<<<<< HEAD:app/src/main/java/com/example/libremaps/feature/map/menuInicial.kt
-=======
     var temperatureC by remember { mutableStateOf<Double?>(null) }
     var weatherCode by remember { mutableStateOf<Int?>(null) }
     val weatherLocationKey = currentLocation?.let { location ->
         "${location.latitude.toBigDecimal().setScale(2, java.math.RoundingMode.HALF_UP)}:" +
                 location.longitude.toBigDecimal().setScale(2, java.math.RoundingMode.HALF_UP)
     }
-
->>>>>>> 01a72e4 (add: wheather api display):app/src/main/java/com/example/libremaps/menuInicial.kt
     val geofencingClient = remember { LocationServices.getGeofencingClient(context) }
     val geofencePendingIntent = remember {
         val intent = Intent(context, GeofenceBroadcastReceiver::class.java)
@@ -165,6 +160,51 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
             } finally {
                 onLogout()
             }
+        }
+    }
+
+    suspend fun synchronizeBookmarks() {
+        bookmarkDao.getPendingBookmarks().forEach { pending ->
+            try {
+                val response = ApiClient.api.createBookmark(
+                    authorization = "Bearer $token",
+                    BookmarkRequest(
+                        type = pending.type,
+                        description = pending.description,
+                        latitude = pending.latitude,
+                        longitude = pending.longitude
+                    )
+                )
+                if (response.isSuccessful) {
+                    response.body()?.let { remoteBookmark ->
+                        bookmarkDao.deleteById(pending.id)
+                        bookmarkDao.insert(
+                            remoteBookmark.copy(
+                                createdAtMs = remoteBookmark.createdAtMs.takeIf { it > 0 }
+                                    ?: System.currentTimeMillis()
+                            ).toEntity()
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+                // Keep the pending marker for the next synchronization attempt.
+            }
+        }
+
+        try {
+            val response = ApiClient.api.getBookmarks()
+            if (response.isSuccessful) {
+                val receivedAt = System.currentTimeMillis()
+                response.body().orEmpty().forEach { remoteBookmark ->
+                    bookmarkDao.insert(
+                        remoteBookmark.copy(
+                            createdAtMs = remoteBookmark.createdAtMs.takeIf { it > 0 } ?: receivedAt
+                        ).toEntity()
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            // Local markers remain available while the server is unreachable.
         }
     }
 
@@ -243,15 +283,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
 
     LaunchedEffect(token) {
         while (true) {
-            try {
-                val response = ApiClient.api.getBookmarks()
-                if (response.isSuccessful) {
-                    val remoteList = response.body().orEmpty()
-                    bookmarkDao.deleteAll()
-                    bookmarkDao.insertAll(remoteList.map { it.toEntity() })
-                }
-            } catch (_: Exception) {
-            }
+            synchronizeBookmarks()
             delay(30_000L)
         }
     }
@@ -620,27 +652,52 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                         if (reportSubmitting) return@TextButton
                         reportSubmitting = true
                         scope.launch {
+                            val request = BookmarkRequest(
+                                type = reportType,
+                                description = reportDescription.trim().ifBlank { null },
+                                latitude = location.latitude,
+                                longitude = location.longitude
+                            )
+                            val localId = -System.currentTimeMillis()
+                            bookmarkDao.insert(
+                                BookmarkEntity(
+                                    id = localId,
+                                    type = request.type,
+                                    description = request.description,
+                                    latitude = request.latitude,
+                                    longitude = request.longitude,
+                                    createdAtMs = System.currentTimeMillis()
+                                )
+                            )
                             try {
                                 val response = ApiClient.api.createBookmark(
                                     authorization = "Bearer $token",
-                                    BookmarkRequest(
-                                        type = reportType,
-                                        description = reportDescription.trim().ifBlank { null },
-                                        latitude = location.latitude,
-                                        longitude = location.longitude
-                                    )
+                                    request
                                 )
                                 if (response.isSuccessful) {
                                     response.body()?.let { newBookmark ->
+                                        bookmarkDao.deleteById(localId)
                                         bookmarkDao.insert(newBookmark.toEntity())
                                     }
                                     reportDescription = ""
                                     reportLocation = null
                                 } else {
-                                    reportError = "Não foi possível guardar a ocorrência."
+                                    reportDescription = ""
+                                    reportLocation = null
+                                    Toast.makeText(
+                                        context,
+                                        "Ocorrência guardada localmente; será sincronizada quando houver ligação.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
                                 }
                             } catch (_: Exception) {
-                                reportError = "Sem ligação ao servidor."
+                                reportDescription = ""
+                                reportLocation = null
+                                Toast.makeText(
+                                    context,
+                                    "Ocorrência guardada localmente; será sincronizada quando houver ligação.",
+                                    Toast.LENGTH_LONG
+                                ).show()
                             } finally {
                                 reportSubmitting = false
                             }
@@ -716,6 +773,11 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 TextButton(
                     onClick = {
                         scope.launch {
+                                if (bookmark.id < 0) {
+                                    bookmarkDao.deleteById(bookmark.id)
+                                    selectedBookmark = null
+                                    return@launch
+                                }
                             try {
                                 val response = ApiClient.api.deleteBookmark("Bearer $token", bookmark.id)
                                 if (response.isSuccessful) {

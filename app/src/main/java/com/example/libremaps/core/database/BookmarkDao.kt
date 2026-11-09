@@ -18,6 +18,9 @@ interface BookmarkDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(bookmark: BookmarkEntity)
 
+    @Query("SELECT * FROM bookmarks WHERE id < 0")
+    suspend fun getPendingBookmarks(): List<BookmarkEntity>
+
     @Query("DELETE FROM bookmarks")
     suspend fun deleteAll()
 
