@@ -124,10 +124,10 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var bookmarkActionError by remember { mutableStateOf<String?>(null) }
     var showProfileDialog by remember { mutableStateOf(false) }
 
-    var isTripActive by remember { mutableStateOf(true) }
-    var totalDistanceMeters by remember { mutableFloatStateOf(0f) }
-    var tripStartTimeMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var elapsedTimeMs by remember { mutableLongStateOf(0L) }
+    var isTripActive by rememberSaveable { mutableStateOf(false) }
+    var totalDistanceMeters by rememberSaveable { mutableFloatStateOf(0f) }
+    var tripStartTimeMs by rememberSaveable { mutableLongStateOf(0L) }
+    var elapsedTimeMs by rememberSaveable { mutableLongStateOf(0L) }
     var previousLocation by remember { mutableStateOf<Location?>(null) }
 
     var geofenceCenter by rememberSaveable { mutableStateOf<LatLng?>(null) }
