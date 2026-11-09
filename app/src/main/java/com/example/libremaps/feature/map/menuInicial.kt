@@ -2,8 +2,10 @@ package com.example.libremaps.feature.map
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.PendingIntent
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
@@ -49,6 +51,7 @@ import com.example.libremaps.core.database.toEntity
 import com.example.libremaps.core.database.toModel
 import com.example.libremaps.core.location.GeofenceBroadcastReceiver
 import com.example.libremaps.core.location.LocationTracker
+import com.example.libremaps.core.sensor.LightSensorTracker
 import com.example.libremaps.core.model.Bookmark
 import com.example.libremaps.core.model.BookmarkReportRequest
 import com.example.libremaps.core.model.BookmarkRequest
@@ -137,6 +140,42 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var dialogRadius by remember { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
     var hasBackgroundPermission by remember { mutableStateOf(hasBackgroundLocationPermission(context)) }
     var pendingGeofence by remember { mutableStateOf<Pair<LatLng, Float>?>(null) }
+
+    //sensor de luz dinamico
+    var ambientLux by remember { mutableStateOf(0f) }
+    val lightTracker = remember { LightSensorTracker(context) }
+
+    DisposableEffect(Unit) {
+        lightTracker.start { lux ->
+            ambientLux = lux
+        }
+        onDispose {
+            lightTracker.stop()
+        }
+    }
+
+    // espaço escuro (< 50 lux )
+    // Bright environment (> 1000 lux)
+    // luminosidade maxima (1.0f)
+    // luminosidade minima (0.2f)
+    // isto esta invertido para testar agora (inverno)
+    val targetBrightness = when {
+        ambientLux < 50f -> 1.0f
+        ambientLux > 1000f -> 0.2f
+        else -> {
+            val fraction = (ambientLux - 50f) / (1000f - 50f)
+            1.0f - (fraction * 0.8f)
+        }
+    }
+
+    LaunchedEffect(targetBrightness) {
+        val activity = context.findActivity()
+        activity?.window?.let { window ->
+            val layoutParams = window.attributes
+            layoutParams.screenBrightness = targetBrightness
+            window.attributes = layoutParams
+        }
+    }
 
     var temperatureC by remember { mutableStateOf<Double?>(null) }
     var weatherCode by remember { mutableStateOf<Int?>(null) }
@@ -1083,4 +1122,11 @@ private fun PermissionPanel(
             }
         }
     }
+}
+
+//necessário para a mudança do brilho, é necessário uma referencia para a activity e a janela.
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
