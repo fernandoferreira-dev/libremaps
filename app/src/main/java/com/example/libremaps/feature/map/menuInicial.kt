@@ -13,6 +13,8 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
+import org.json.JSONArray
+import org.json.JSONObject
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -21,7 +23,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddLocationAlt
 import androidx.compose.material.icons.filled.EditLocationAlt
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -76,6 +80,9 @@ import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cloud
@@ -89,6 +96,49 @@ private const val GEOFENCE_ID = "user_geofence"
 private const val DEFAULT_GEOFENCE_RADIUS_M = 150f
 
 private const val BOOKMARK_TTL_MS = 48L * 60 * 60 * 1000
+
+private data class TripHistoryEntry(
+    val startedAtMs: Long,
+    val distanceMeters: Float,
+    val durationMs: Long
+)
+
+private const val TRIP_HISTORY_PREFS = "trip_history"
+private const val TRIP_HISTORY_KEY = "entries"
+
+private fun loadTripHistory(context: Context): List<TripHistoryEntry> {
+    val rawHistory = context.getSharedPreferences(TRIP_HISTORY_PREFS, Context.MODE_PRIVATE)
+        .getString(TRIP_HISTORY_KEY, null) ?: return emptyList()
+    val history = JSONArray(rawHistory)
+    return buildList {
+        for (index in 0 until history.length()) {
+            val entry = history.optJSONObject(index) ?: continue
+            add(
+                TripHistoryEntry(
+                    startedAtMs = entry.optLong("startedAtMs"),
+                    distanceMeters = entry.optDouble("distanceMeters").toFloat(),
+                    durationMs = entry.optLong("durationMs")
+                )
+            )
+        }
+    }
+}
+
+private fun saveTripHistory(context: Context, entries: List<TripHistoryEntry>) {
+    val history = JSONArray()
+    entries.takeLast(50).forEach { entry ->
+        history.put(
+            JSONObject()
+                .put("startedAtMs", entry.startedAtMs)
+                .put("distanceMeters", entry.distanceMeters)
+                .put("durationMs", entry.durationMs)
+        )
+    }
+    context.getSharedPreferences(TRIP_HISTORY_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(TRIP_HISTORY_KEY, history.toString())
+        .apply()
+}
 
 private fun hasBackgroundLocationPermission(context: Context): Boolean =
     Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
@@ -132,6 +182,10 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var tripStartTimeMs by rememberSaveable { mutableLongStateOf(0L) }
     var elapsedTimeMs by rememberSaveable { mutableLongStateOf(0L) }
     var previousLocation by remember { mutableStateOf<Location?>(null) }
+    val tripHistory = remember {
+        mutableStateListOf<TripHistoryEntry>().apply { addAll(loadTripHistory(context)) }
+    }
+    var showTripHistory by remember { mutableStateOf(false) }
 
     var geofenceCenter by rememberSaveable { mutableStateOf<LatLng?>(null) }
     var geofenceRadius by rememberSaveable { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
@@ -466,13 +520,8 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
             Box {
                 FloatingActionButton(
                     onClick = { showLocationMenu = true },
-                    containerColor = if (geofenceActive) MaterialTheme.colorScheme.tertiaryContainer
-                    else MaterialTheme.colorScheme.primaryContainer
                 ) {
-                    Icon(
-                        imageVector = if (geofenceActive) Icons.Default.EditLocationAlt else Icons.Default.AddLocationAlt,
-                        contentDescription = "Menu de Geofence e Ocorrências"
-                    )
+                    Icon(Icons.Default.MoreVert, contentDescription = "Mais opções")
                 }
 
                 DropdownMenu(
@@ -524,32 +573,68 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                             }
                         }
                     )
+
+                    HorizontalDivider()
+
+                    DropdownMenuItem(
+                        text = { Text("Histórico de viagens") },
+                        leadingIcon = {
+                            Icon(Icons.Default.History, contentDescription = null)
+                        },
+                        onClick = {
+                            showLocationMenu = false
+                            showTripHistory = true
+                        }
+                    )
+
+                    DropdownMenuItem(
+                        text = { Text("Perfil") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Person, contentDescription = null)
+                        },
+                        onClick = {
+                            showLocationMenu = false
+                            showProfileDialog = true
+                        }
+                    )
+
+                    DropdownMenuItem(
+                        text = { Text("Reiniciar viagem") },
+                        leadingIcon = {
+                            Icon(Icons.Default.RestartAlt, contentDescription = null)
+                        },
+                        onClick = {
+                            showLocationMenu = false
+                            if (elapsedTimeMs > 0L || totalDistanceMeters > 0f) {
+                                tripHistory.add(
+                                    TripHistoryEntry(tripStartTimeMs, totalDistanceMeters, elapsedTimeMs)
+                                )
+                                saveTripHistory(context, tripHistory)
+                            }
+                            totalDistanceMeters = 0f
+                            tripStartTimeMs = System.currentTimeMillis()
+                            elapsedTimeMs = 0L
+                            previousLocation = currentLocation
+                        }
+                    )
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                FloatingActionButton(
-                    onClick = {
-                        followUser = true
-                        currentLocation?.let {
-                            scope.launch {
-                                cameraPositionState.animate(
-                                    CameraUpdateFactory.newLatLngZoom(
-                                        LatLng(it.latitude, it.longitude), DEFAULT_ZOOM
-                                    )
+            FloatingActionButton(
+                onClick = {
+                    followUser = true
+                    currentLocation?.let {
+                        scope.launch {
+                            cameraPositionState.animate(
+                                CameraUpdateFactory.newLatLngZoom(
+                                    LatLng(it.latitude, it.longitude), DEFAULT_ZOOM
                                 )
-                            }
+                            )
                         }
                     }
-                ) {
-                    Icon(Icons.Default.MyLocation, contentDescription = "Centrar na minha posição")
                 }
-
-                FloatingActionButton(
-                    onClick = { showProfileDialog = true }
-                ) {
-                    Icon(Icons.Default.Person, contentDescription = "Perfil de Utilizador")
-                }
+            ) {
+                Icon(Icons.Default.MyLocation, contentDescription = "Centrar na minha posição")
             }
 
             if (showProfileDialog) {
@@ -578,10 +663,8 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .widthIn(max = 600.dp)
-                .navigationBarsPadding()
-                .padding(16.dp),
-            shape = RoundedCornerShape(24.dp)
+                .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+            shape = RoundedCornerShape(20.dp)
         ) {
             when {
                 !hasPermission -> PermissionPanel(
@@ -624,12 +707,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                             isTripActive = true
                         }
                     },
-                    onResetTrip = {
-                        totalDistanceMeters = 0f
-                        tripStartTimeMs = System.currentTimeMillis()
-                        elapsedTimeMs = 0L
-                        previousLocation = currentLocation
-                    }
                 )
             }
         }
@@ -658,6 +735,13 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 removeGeofence()
             },
             onDismiss = { showGeofenceDialog = false }
+        )
+    }
+
+    if (showTripHistory) {
+        TripHistoryDialog(
+            entries = tripHistory.asReversed(),
+            onDismiss = { showTripHistory = false }
         )
     }
 
@@ -865,6 +949,45 @@ private fun WeatherCard(
     }
 }
 
+@Composable
+private fun TripHistoryDialog(
+    entries: List<TripHistoryEntry>,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Histórico de viagens") },
+        text = {
+            if (entries.isEmpty()) {
+                Text("Ainda não existem viagens guardadas.")
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    entries.forEach { entry ->
+                        Column {
+                            Text(
+                                text = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+                                    .format(Date(entry.startedAtMs)),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "${formatDistanceValue(entry.distanceMeters)} " +
+                                        "${formatDistanceUnit(entry.distanceMeters)} · " +
+                                        formatDuration(entry.durationMs),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Fechar") }
+        }
+    )
+}
+
 private fun weatherPresentation(code: Int?): Pair<ImageVector, String> = when (code) {
     0 -> Icons.Default.WbSunny to "Céu limpo"
     1, 2, 3 -> Icons.Default.Cloud to "Parcialmente nublado"
@@ -948,8 +1071,7 @@ private fun LocationInfoPanel(
     totalDistanceMeters: Float,
     elapsedTimeMs: Long,
     isTripActive: Boolean,
-    onToggleTrip: () -> Unit,
-    onResetTrip: () -> Unit
+    onToggleTrip: () -> Unit
 ) {
     val speedKmh = if (location.hasSpeed()) location.speed * MS_TO_KMH else 0.0
 
@@ -1003,13 +1125,6 @@ private fun LocationInfoPanel(
                         imageVector = if (isTripActive) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isTripActive) "Pausar viagem" else "Iniciar viagem",
                         tint = if (isTripActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
-                    )
-                }
-                IconButton(onClick = onResetTrip) {
-                    Icon(
-                        imageVector = Icons.Default.RestartAlt,
-                        contentDescription = "Reiniciar viagem",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
