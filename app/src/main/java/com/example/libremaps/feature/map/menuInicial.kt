@@ -70,6 +70,15 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+<<<<<<< HEAD:app/src/main/java/com/example/libremaps/feature/map/menuInicial.kt
+=======
+import kotlin.math.roundToInt
+import androidx.compose.material.icons.filled.AcUnit
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.WaterDrop
+import androidx.compose.material.icons.filled.WbSunny
+>>>>>>> 01a72e4 (add: wheather api display):app/src/main/java/com/example/libremaps/menuInicial.kt
 
 private const val DEFAULT_ZOOM = 17f
 private const val MS_TO_KMH = 3.6
@@ -130,6 +139,16 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var hasBackgroundPermission by remember { mutableStateOf(hasBackgroundLocationPermission(context)) }
     var pendingGeofence by remember { mutableStateOf<Pair<LatLng, Float>?>(null) }
 
+<<<<<<< HEAD:app/src/main/java/com/example/libremaps/feature/map/menuInicial.kt
+=======
+    var temperatureC by remember { mutableStateOf<Double?>(null) }
+    var weatherCode by remember { mutableStateOf<Int?>(null) }
+    val weatherLocationKey = currentLocation?.let { location ->
+        "${location.latitude.toBigDecimal().setScale(2, java.math.RoundingMode.HALF_UP)}:" +
+                location.longitude.toBigDecimal().setScale(2, java.math.RoundingMode.HALF_UP)
+    }
+
+>>>>>>> 01a72e4 (add: wheather api display):app/src/main/java/com/example/libremaps/menuInicial.kt
     val geofencingClient = remember { LocationServices.getGeofencingClient(context) }
     val geofencePendingIntent = remember {
         val intent = Intent(context, GeofenceBroadcastReceiver::class.java)
@@ -303,6 +322,26 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         }
     }
 
+    LaunchedEffect(weatherLocationKey) {
+        val location = currentLocation ?: run {
+            temperatureC = null
+            weatherCode = null
+            return@LaunchedEffect
+        }
+
+        try {
+            val response = WeatherClient.api.getCurrent(location.latitude, location.longitude)
+            if (response.isSuccessful) {
+                response.body()?.current?.let { weather ->
+                    temperatureC = weather.temperature
+                    weatherCode = weather.weatherCode
+                }
+            }
+        } catch (_: Exception) {
+            // Weather is optional and should not affect map or trip tracking.
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
 
         GoogleMap(
@@ -453,6 +492,15 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 )
             }
         }
+
+        WeatherCard(
+            temperatureC = temperatureC,
+            weatherCode = weatherCode,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 88.dp, start = 16.dp, end = 16.dp)
+        )
 
         ElevatedCard(
             modifier = Modifier
@@ -685,6 +733,42 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
             }
         )
     }
+}
+
+@Composable
+private fun WeatherCard(
+    temperatureC: Double?,
+    weatherCode: Int?,
+    modifier: Modifier = Modifier
+) {
+    val temperature = temperatureC ?: return
+    val (icon, description) = weatherPresentation(weatherCode)
+
+    ElevatedCard(modifier = modifier) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(imageVector = icon, contentDescription = description)
+            Text(
+                text = "${temperature.roundToInt()} °C",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text(description, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+private fun weatherPresentation(code: Int?): Pair<ImageVector, String> = when (code) {
+    0 -> Icons.Default.WbSunny to "Céu limpo"
+    1, 2, 3 -> Icons.Default.Cloud to "Parcialmente nublado"
+    45, 48 -> Icons.Default.Cloud to "Nevoeiro"
+    in 51..67, in 80..82 -> Icons.Default.WaterDrop to "Chuva"
+    in 71..77, in 85..86 -> Icons.Default.AcUnit to "Neve"
+    in 95..99 -> Icons.Default.Bolt to "Trovoada"
+    else -> Icons.Default.Cloud to "Condição desconhecida"
 }
 
 @Composable
