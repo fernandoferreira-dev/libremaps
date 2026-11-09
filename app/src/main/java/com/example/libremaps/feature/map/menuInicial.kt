@@ -117,15 +117,15 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     }
 
     var currentLocation by remember { mutableStateOf<Location?>(null) }
-    var followUser by remember { mutableStateOf(true) }
+    var followUser by rememberSaveable { mutableStateOf(true) }
     var reportLocation by remember { mutableStateOf<LatLng?>(null) }
-    var reportType by remember { mutableStateOf("ACCIDENT") }
-    var reportDescription by remember { mutableStateOf("") }
-    var reportError by remember { mutableStateOf<String?>(null) }
-    var reportSubmitting by remember { mutableStateOf(false) }
+    var reportType by rememberSaveable { mutableStateOf("ACCIDENT") }
+    var reportDescription by rememberSaveable { mutableStateOf("") }
+    var reportError by rememberSaveable { mutableStateOf<String?>(null) }
+    var reportSubmitting by rememberSaveable { mutableStateOf(false) }
     var selectedBookmark by remember { mutableStateOf<Bookmark?>(null) }
-    var bookmarkActionError by remember { mutableStateOf<String?>(null) }
-    var showProfileDialog by remember { mutableStateOf(false) }
+    var bookmarkActionError by rememberSaveable { mutableStateOf<String?>(null) }
+    var showProfileDialog by rememberSaveable { mutableStateOf(false) }
 
     var isTripActive by rememberSaveable { mutableStateOf(false) }
     var totalDistanceMeters by rememberSaveable { mutableFloatStateOf(0f) }
@@ -135,9 +135,9 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
 
     var geofenceCenter by rememberSaveable { mutableStateOf<LatLng?>(null) }
     var geofenceRadius by rememberSaveable { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
-    var showGeofenceDialog by remember { mutableStateOf(false) }
-    var showLocationMenu by remember { mutableStateOf(false) }
-    var dialogRadius by remember { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
+    var showGeofenceDialog by rememberSaveable { mutableStateOf(false) }
+    var showLocationMenu by rememberSaveable { mutableStateOf(false) }
+    var dialogRadius by rememberSaveable { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
     var hasBackgroundPermission by remember { mutableStateOf(hasBackgroundLocationPermission(context)) }
     var pendingGeofence by remember { mutableStateOf<Pair<LatLng, Float>?>(null) }
 
@@ -570,6 +570,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
+                .widthIn(max = 400.dp)
                 .padding(top = 88.dp, start = 16.dp, end = 16.dp)
         )
 
@@ -577,6 +578,8 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .widthIn(max = 600.dp)
+                .navigationBarsPadding()
                 .padding(16.dp),
             shape = RoundedCornerShape(24.dp)
         ) {

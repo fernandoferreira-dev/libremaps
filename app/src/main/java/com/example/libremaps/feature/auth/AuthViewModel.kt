@@ -23,17 +23,17 @@ data class AuthUiState(
     val token: String? = null,
     val registered: Boolean = false,
     val passwordResetSuccess: Boolean = false,
-    val passwordChangedSuccess: Boolean = false
+    val passwordChangedSuccess: Boolean = false,
 )
 
 class AuthViewModel(
-    private val repository: AuthRepository = AuthRepository()
+    private val repository: AuthRepository = AuthRepository(),
 ) : ViewModel() {
     var state by mutableStateOf(AuthUiState())
         private set
 
     fun clearError() {
-        if (state.error != null || state.successMessage != null) {
+        if ((state.error != null) || (state.successMessage != null)) {
             state = state.copy(error = null, successMessage = null)
         }
     }
@@ -50,6 +50,7 @@ class AuthViewModel(
         }
     }
 
+    @Suppress("unused")
     fun consumePasswordChanged() {
         if (state.passwordChangedSuccess) {
             state = state.copy(passwordChangedSuccess = false)
@@ -87,7 +88,7 @@ class AuthViewModel(
             return
         }
 
-        if (isRegister && password != confirmPassword) {
+        if (isRegister && (password != confirmPassword)) {
             state = AuthUiState(error = "As palavras-passe não coincidem")
             return
         }
@@ -113,7 +114,7 @@ class AuthViewModel(
                         )
 
                         else -> {
-                            val token = body?.token.orEmpty()
+                            val token = body.token
                             sessionManager?.saveSession(email.trim(), token)
                             AuthUiState(loggedIn = true, token = token)
                         }

@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -68,21 +69,21 @@ fun ProfileDialog(
     val auth = "Bearer $token"
 
     var email by remember { mutableStateOf(sessionManager.getUserEmail() ?: "Utilizador") }
-    var savedName by remember { mutableStateOf("") }
-    var nameInput by remember { mutableStateOf("") }
+    var savedName by rememberSaveable { mutableStateOf("") }
+    var nameInput by rememberSaveable { mutableStateOf("") }
     var avatar by remember { mutableStateOf<Bitmap?>(null) }
     var profileLoading by remember { mutableStateOf(true) }
     var profileBusy by remember { mutableStateOf(false) }
     var profileMessage by remember { mutableStateOf<String?>(null) }
     var profileError by remember { mutableStateOf<String?>(null) }
 
-    var showImageSourceDialog by remember { mutableStateOf(false) }
+    var showImageSourceDialog by rememberSaveable { mutableStateOf(false) }
 
-    var showChangePassword by remember { mutableStateOf(false) }
-    var oldPassword by remember { mutableStateOf("") }
-    var newPassword by remember { mutableStateOf("") }
-    var confirmPassword by remember { mutableStateOf("") }
-    var passwordVisible by remember { mutableStateOf(false) }
+    var showChangePassword by rememberSaveable { mutableStateOf(false) }
+    var oldPassword by rememberSaveable { mutableStateOf("") }
+    var newPassword by rememberSaveable { mutableStateOf("") }
+    var confirmPassword by rememberSaveable { mutableStateOf("") }
+    var passwordVisible by rememberSaveable { mutableStateOf(false) }
 
     val state = vm.state
 
@@ -241,6 +242,7 @@ fun ProfileDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
+                .widthIn(max = 560.dp)
                 .wrapContentHeight()
                 .padding(vertical = 16.dp)
                 .imePadding(),

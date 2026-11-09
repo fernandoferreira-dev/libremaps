@@ -41,27 +41,21 @@ class MainActivity : ComponentActivity() {
                 val authViewModel: AuthViewModel = viewModel()
 
                 var loggedIn by rememberSaveable { mutableStateOf(sessionManager.isLoggedIn()) }
-                var sessionToken by rememberSaveable { mutableStateOf<String?>(sessionManager.getToken()) }
+                var sessionToken by rememberSaveable { mutableStateOf(sessionManager.getToken()) }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
                         if (loggedIn) {
-                            MenuInicial(
-                                token = sessionToken.orEmpty(),
-                                onLogout = {
-                                    authViewModel.logout(sessionManager)
-                                    loggedIn = false
-                                    sessionToken = null
-                                }
-                            )
+                            MenuInicial(token = sessionToken.orEmpty()) {
+                                authViewModel.logout(sessionManager)
+                                loggedIn = false
+                                sessionToken = null
+                            }
                         } else {
-                            Login(
-                                vm = authViewModel,
-                                onLoggedIn = { token ->
-                                    sessionToken = token
-                                    loggedIn = true
-                                }
-                            )
+                            Login(vm = authViewModel) { token ->
+                                sessionToken = token
+                                loggedIn = true
+                            }
                         }
                     }
                 }
