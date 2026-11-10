@@ -125,6 +125,20 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: (String) -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            // Banner XML integrado em Jetpack Compose via AndroidView (Interoperabilidade XML + Compose)
+            androidx.compose.ui.viewinterop.AndroidView(
+                factory = { ctx ->
+                    android.view.LayoutInflater.from(ctx).inflate(
+                        com.example.libremaps.R.layout.header_banner_xml,
+                        android.widget.FrameLayout(ctx),
+                        false
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 20.dp)
+            )
+
             // Header / Logo
             Surface(
                 modifier = Modifier.size(80.dp),
