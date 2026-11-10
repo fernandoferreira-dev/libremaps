@@ -46,44 +46,46 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         showNotification(context, title, message)
     }
 
-    @SuppressLint("MissingPermission")
-    private fun showNotification(context: Context, title: String, message: String) {
-        val channelId = "geofence_channel"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "Geofence Alerts"
-            val descriptionText = "Notificações de entrada e saída de perímetros"
-            val importance = NotificationManager.IMPORTANCE_HIGH
-            val channel = NotificationChannel(channelId, name, importance).apply {
-                description = descriptionText
+    companion object {
+        @SuppressLint("MissingPermission")
+        fun showNotification(context: Context, title: String, message: String) {
+            val channelId = "geofence_channel"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val name = "Geofence Alerts"
+                val descriptionText = "Notificações de entrada e saída de perímetros"
+                val importance = NotificationManager.IMPORTANCE_HIGH
+                val channel = NotificationChannel(channelId, name, importance).apply {
+                    description = descriptionText
+                }
+                val notificationManager: NotificationManager =
+                    context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.createNotificationChannel(channel)
             }
-            val notificationManager: NotificationManager =
-                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
-        }
 
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        }
-        val pendingIntent: PendingIntent = PendingIntent.getActivity(
-            context, 0, intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        val builder = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_map)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-
-        try {
-            with(NotificationManagerCompat.from(context)) {
-                notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), builder.build())
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
             }
-        } catch (e: SecurityException) {
-            Log.e("Geofence", "SecurityException posting notification: ${e.message}")
+            val pendingIntent: PendingIntent = PendingIntent.getActivity(
+                context, 0, intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+
+            val builder = NotificationCompat.Builder(context, channelId)
+                .setSmallIcon(android.R.drawable.ic_dialog_map)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+
+            try {
+                with(NotificationManagerCompat.from(context)) {
+                    notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), builder.build())
+                }
+            } catch (e: SecurityException) {
+                Log.e("Geofence", "SecurityException posting notification: ${e.message}")
+            }
         }
     }
 }

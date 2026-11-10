@@ -327,6 +327,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
             .setTransitionTypes(
                 Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT
             )
+            .setNotificationResponsiveness(1000)
             .build()
 
         val request = GeofencingRequest.Builder()
@@ -486,6 +487,37 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                     CameraUpdateFactory.newLatLng(LatLng(location.latitude, location.longitude))
                 )
             }
+        }
+    }
+
+    var wasInsideGeofence by remember { mutableStateOf<Boolean?>(null) }
+
+    LaunchedEffect(currentLocation, geofenceCenter, geofenceRadius) {
+        val center = geofenceCenter
+        val loc = currentLocation
+        if (center != null && loc != null) {
+            val results = FloatArray(1)
+            Location.distanceBetween(
+                loc.latitude, loc.longitude,
+                center.latitude, center.longitude,
+                results
+            )
+            val distanceMeters = results[0]
+            val isInside = distanceMeters <= geofenceRadius
+
+            if (wasInsideGeofence == null) {
+                wasInsideGeofence = isInside
+            } else if (wasInsideGeofence == true && !isInside) {
+                wasInsideGeofence = false
+                Toast.makeText(context, "Saiu do perímetro definido!", Toast.LENGTH_LONG).show()
+                GeofenceBroadcastReceiver.showNotification(context, "Saída do Perímetro", "Saiu do perímetro definido.")
+            } else if (wasInsideGeofence == false && isInside) {
+                wasInsideGeofence = true
+                Toast.makeText(context, "Entrou no perímetro definido!", Toast.LENGTH_LONG).show()
+                GeofenceBroadcastReceiver.showNotification(context, "Entrada no Perímetro", "Entrou no perímetro definido.")
+            }
+        } else {
+            wasInsideGeofence = null
         }
     }
 
