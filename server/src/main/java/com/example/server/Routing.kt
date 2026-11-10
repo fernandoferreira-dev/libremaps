@@ -53,7 +53,8 @@ data class Bookmark(
     val description: String? = null,
     val latitude: Double,
     val longitude: Double,
-    val confirmations: Int = 0
+    val confirmations: Int = 0,
+    val createdAtMs: Long = 0
 )
 
 @Serializable
@@ -65,7 +66,7 @@ data class ProfileResponse(val email: String, val displayName: String? = null, v
 @Serializable
 data class UpdateProfileRequest(val displayName: String)
 
-private val ALLOWED_TYPES = setOf("ACCIDENT", "DANGER", "ROAD_CLOSED")
+private val ALLOWED_TYPES = setOf("Acidente", "Perigo", "Estrada Fechada", "ACCIDENT", "DANGER", "ROAD_CLOSED")
 private const val SESSION_DAYS = 30
 private const val REPORT_HIDE_THRESHOLD = 3
 private const val BOOKMARK_TTL_HOURS = 48
@@ -372,7 +373,7 @@ fun Application.configureRouting() {
                 }
                 call.respond(
                     HttpStatusCode.Created,
-                    Bookmark(id, req.type, description, req.latitude, req.longitude, 0)
+                    Bookmark(id, req.type, description, req.latitude, req.longitude, 0, System.currentTimeMillis())
                 )
             } catch (e: Exception) {
                 call.respond(

@@ -5,7 +5,10 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [BookmarkEntity::class], version = 2, exportSchema = false)
+ // Base de dados local Room do LibreMaps.
+ // Armazena localmente os dados da aplicação para garantir o funcionamento offline.
+
+@Database(entities = [BookmarkEntity::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun bookmarkDao(): BookmarkDao
@@ -16,15 +19,15 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
-                val dbinstance = Room.databaseBuilder(
+                val dbInstance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "libremaps_database.db"
                 )
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
-                INSTANCE = dbinstance
-                dbinstance
+                INSTANCE = dbInstance
+                dbInstance
             }
         }
     }
