@@ -380,6 +380,23 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         }
     }
 
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        val pending = pendingGeofence
+        if (pending != null) {
+            if (hasBackgroundPermission) {
+                pendingGeofence = null
+                registerGeofence(pending.first, pending.second)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            } else {
+                pendingGeofence = null
+                registerGeofence(pending.first, pending.second)
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         if (!hasPermission) {
             permissionLauncher.launch(
@@ -784,11 +801,18 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 showGeofenceDialog = false
                 if (loc != null) {
                     val center = LatLng(loc.latitude, loc.longitude)
-                    if (hasBackgroundPermission) {
+                    pendingGeofence = center to dialogRadius
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else if (hasBackgroundPermission) {
+                        pendingGeofence = null
                         registerGeofence(center, dialogRadius)
                     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        pendingGeofence = center to dialogRadius
                         backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                    } else {
+                        pendingGeofence = null
+                        registerGeofence(center, dialogRadius)
                     }
                 }
             },
