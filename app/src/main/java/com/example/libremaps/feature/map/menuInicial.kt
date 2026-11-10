@@ -17,22 +17,38 @@ import org.json.JSONArray
 import org.json.JSONObject
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.AddLocationAlt
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.EditLocationAlt
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.WaterDrop
+import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -49,18 +65,20 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.libremaps.core.data.repository.BookmarkRepository
 import com.example.libremaps.core.database.AppDatabase
 import com.example.libremaps.core.database.BookmarkEntity
 import com.example.libremaps.core.database.toEntity
 import com.example.libremaps.core.database.toModel
 import com.example.libremaps.core.location.GeofenceBroadcastReceiver
 import com.example.libremaps.core.location.LocationTracker
-import com.example.libremaps.core.sensor.LightSensorTracker
 import com.example.libremaps.core.model.Bookmark
 import com.example.libremaps.core.model.BookmarkReportRequest
 import com.example.libremaps.core.model.BookmarkRequest
 import com.example.libremaps.core.network.ApiClient
+import com.example.libremaps.core.network.NetworkMonitor
 import com.example.libremaps.core.network.WeatherClient
+import com.example.libremaps.core.sensor.LightSensorTracker
 import com.example.libremaps.feature.profile.ProfileDialog
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingRequest
@@ -79,15 +97,11 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import androidx.compose.material.icons.filled.AcUnit
-import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.WaterDrop
-import androidx.compose.material.icons.filled.WbSunny
+import java.util.UUID
+import kotlin.math.roundToInt
 
 private const val DEFAULT_ZOOM = 17f
 private const val MS_TO_KMH = 3.6
@@ -97,11 +111,21 @@ private const val DEFAULT_GEOFENCE_RADIUS_M = 150f
 
 private const val BOOKMARK_TTL_MS = 48L * 60 * 60 * 1000
 
+
+//Modelo de dados para o Histórico de Deslocações/Viagens.
+//Guarda detalhes completos da deslocação (datas, distância, duração, velocidade média e máxima).
+
 private data class TripHistoryEntry(
+    val id: String = UUID.randomUUID().toString(),
     val startedAtMs: Long,
+    val endedAtMs: Long = System.currentTimeMillis(),
     val distanceMeters: Float,
-    val durationMs: Long
-)
+    val durationMs: Long,
+    val maxSpeedKmh: Double = 0.0
+) {
+    val averageSpeedKmh: Double
+        get() = if (durationMs > 1000) (distanceMeters / 1000.0) / (durationMs / 3600000.0) else 0.0
+}
 
 private const val TRIP_HISTORY_PREFS = "trip_history"
 private const val TRIP_HISTORY_KEY = "entries"
@@ -109,18 +133,27 @@ private const val TRIP_HISTORY_KEY = "entries"
 private fun loadTripHistory(context: Context): List<TripHistoryEntry> {
     val rawHistory = context.getSharedPreferences(TRIP_HISTORY_PREFS, Context.MODE_PRIVATE)
         .getString(TRIP_HISTORY_KEY, null) ?: return emptyList()
-    val history = JSONArray(rawHistory)
-    return buildList {
-        for (index in 0 until history.length()) {
-            val entry = history.optJSONObject(index) ?: continue
-            add(
-                TripHistoryEntry(
-                    startedAtMs = entry.optLong("startedAtMs"),
-                    distanceMeters = entry.optDouble("distanceMeters").toFloat(),
-                    durationMs = entry.optLong("durationMs")
+    return try {
+        val history = JSONArray(rawHistory)
+        buildList {
+            for (index in 0 until history.length()) {
+                val entry = history.optJSONObject(index) ?: continue
+                val startedAt = entry.optLong("startedAtMs")
+                val duration = entry.optLong("durationMs")
+                add(
+                    TripHistoryEntry(
+                        id = entry.optString("id", UUID.randomUUID().toString()),
+                        startedAtMs = startedAt,
+                        endedAtMs = entry.optLong("endedAtMs", startedAt + duration),
+                        distanceMeters = entry.optDouble("distanceMeters").toFloat(),
+                        durationMs = duration,
+                        maxSpeedKmh = entry.optDouble("maxSpeedKmh", 0.0)
+                    )
                 )
-            )
+            }
         }
+    } catch (_: Exception) {
+        emptyList()
     }
 }
 
@@ -129,9 +162,12 @@ private fun saveTripHistory(context: Context, entries: List<TripHistoryEntry>) {
     entries.takeLast(50).forEach { entry ->
         history.put(
             JSONObject()
+                .put("id", entry.id)
                 .put("startedAtMs", entry.startedAtMs)
+                .put("endedAtMs", entry.endedAtMs)
                 .put("distanceMeters", entry.distanceMeters)
                 .put("durationMs", entry.durationMs)
+                .put("maxSpeedKmh", entry.maxSpeedKmh)
         )
     }
     context.getSharedPreferences(TRIP_HISTORY_PREFS, Context.MODE_PRIVATE)
@@ -153,23 +189,28 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     val scope = rememberCoroutineScope()
     val tracker = remember { LocationTracker(context) }
 
+    // Monitorização da rede para suporte a modo offline e standby de sincronização (RNF 6 e 10)
+    val networkMonitor = remember { NetworkMonitor(context) }
+    val isOnline by networkMonitor.isOnline.collectAsState(initial = networkMonitor.checkCurrentNetwork())
+
     var hasPermission by remember { mutableStateOf(tracker.hasPermission()) }
     var permissionDenied by remember { mutableStateOf(false) }
 
     val db = remember { AppDatabase.getDatabase(context) }
     val bookmarkDao = remember { db.bookmarkDao() }
+    val bookmarkRepository = remember { BookmarkRepository(dao = bookmarkDao) }
     val localBookmarkEntities by bookmarkDao.getAllBookmarks().collectAsState(initial = emptyList())
     val bookmarks = remember(localBookmarkEntities) {
         val now = System.currentTimeMillis()
         localBookmarkEntities
-            .filter { now - it.createdAtMs < BOOKMARK_TTL_MS }
+            .filter { it.createdAtMs <= 0L || (now - it.createdAtMs) < BOOKMARK_TTL_MS }
             .map { it.toModel() }
     }
 
     var currentLocation by remember { mutableStateOf<Location?>(null) }
     var followUser by rememberSaveable { mutableStateOf(true) }
     var reportLocation by remember { mutableStateOf<LatLng?>(null) }
-    var reportType by rememberSaveable { mutableStateOf("ACCIDENT") }
+    var reportType by rememberSaveable { mutableStateOf("Acidente") }
     var reportDescription by rememberSaveable { mutableStateOf("") }
     var reportError by rememberSaveable { mutableStateOf<String?>(null) }
     var reportSubmitting by rememberSaveable { mutableStateOf(false) }
@@ -177,15 +218,39 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var bookmarkActionError by rememberSaveable { mutableStateOf<String?>(null) }
     var showProfileDialog by rememberSaveable { mutableStateOf(false) }
 
+    // Estado da viagem/deslocação
     var isTripActive by rememberSaveable { mutableStateOf(false) }
     var totalDistanceMeters by rememberSaveable { mutableFloatStateOf(0f) }
     var tripStartTimeMs by rememberSaveable { mutableLongStateOf(0L) }
     var elapsedTimeMs by rememberSaveable { mutableLongStateOf(0L) }
+    var maxSpeedKmh by rememberSaveable { mutableDoubleStateOf(0.0) }
     var previousLocation by remember { mutableStateOf<Location?>(null) }
     val tripHistory = remember {
         mutableStateListOf<TripHistoryEntry>().apply { addAll(loadTripHistory(context)) }
     }
     var showTripHistory by remember { mutableStateOf(false) }
+
+    fun finishAndSaveTrip() {
+        if (elapsedTimeMs > 5000L || totalDistanceMeters > 5f) {
+            val entry = TripHistoryEntry(
+                id = UUID.randomUUID().toString(),
+                startedAtMs = if (tripStartTimeMs > 0) tripStartTimeMs else (System.currentTimeMillis() - elapsedTimeMs),
+                endedAtMs = System.currentTimeMillis(),
+                distanceMeters = totalDistanceMeters,
+                durationMs = elapsedTimeMs,
+                maxSpeedKmh = maxSpeedKmh
+            )
+            tripHistory.add(entry)
+            saveTripHistory(context, tripHistory)
+            Toast.makeText(context, "Viagem guardada no histórico!", Toast.LENGTH_SHORT).show()
+        }
+        isTripActive = false
+        totalDistanceMeters = 0f
+        tripStartTimeMs = 0L
+        elapsedTimeMs = 0L
+        maxSpeedKmh = 0.0
+        previousLocation = currentLocation
+    }
 
     var geofenceCenter by rememberSaveable { mutableStateOf<LatLng?>(null) }
     var geofenceRadius by rememberSaveable { mutableFloatStateOf(DEFAULT_GEOFENCE_RADIUS_M) }
@@ -195,7 +260,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     var hasBackgroundPermission by remember { mutableStateOf(hasBackgroundLocationPermission(context)) }
     var pendingGeofence by remember { mutableStateOf<Pair<LatLng, Float>?>(null) }
 
-    //sensor de luz dinamico
+    // Sensor de luz dinâmico para brilho do ecrã
     var ambientLux by remember { mutableStateOf(0f) }
     val lightTracker = remember { LightSensorTracker(context) }
 
@@ -208,11 +273,6 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         }
     }
 
-    // espaço escuro (< 50 lux )
-    // Bright environment (> 1000 lux)
-    // luminosidade maxima (1.0f)
-    // luminosidade minima (0.2f)
-    // isto esta invertido para testar agora (inverno)
     val targetBrightness = when {
         ambientLux < 50f -> 1.0f
         ambientLux > 1000f -> 0.2f
@@ -248,56 +308,13 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     fun performLogout() {
         scope.launch {
             try {
-                ApiClient.api.logout("Bearer $token")
+                if (isOnline) {
+                    ApiClient.api.logout("Bearer $token")
+                }
             } catch (_: Exception) {
             } finally {
                 onLogout()
             }
-        }
-    }
-
-    suspend fun synchronizeBookmarks() {
-        bookmarkDao.getPendingBookmarks().forEach { pending ->
-            try {
-                val response = ApiClient.api.createBookmark(
-                    authorization = "Bearer $token",
-                    BookmarkRequest(
-                        type = pending.type,
-                        description = pending.description,
-                        latitude = pending.latitude,
-                        longitude = pending.longitude
-                    )
-                )
-                if (response.isSuccessful) {
-                    response.body()?.let { remoteBookmark ->
-                        bookmarkDao.deleteById(pending.id)
-                        bookmarkDao.insert(
-                            remoteBookmark.copy(
-                                createdAtMs = remoteBookmark.createdAtMs.takeIf { it > 0 }
-                                    ?: System.currentTimeMillis()
-                            ).toEntity()
-                        )
-                    }
-                }
-            } catch (_: Exception) {
-                // Keep the pending marker for the next synchronization attempt.
-            }
-        }
-
-        try {
-            val response = ApiClient.api.getBookmarks()
-            if (response.isSuccessful) {
-                val receivedAt = System.currentTimeMillis()
-                response.body().orEmpty().forEach { remoteBookmark ->
-                    bookmarkDao.insert(
-                        remoteBookmark.copy(
-                            createdAtMs = remoteBookmark.createdAtMs.takeIf { it > 0 } ?: receivedAt
-                        ).toEntity()
-                    )
-                }
-            }
-        } catch (_: Exception) {
-            // Local markers remain available while the server is unreachable.
         }
     }
 
@@ -321,10 +338,10 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
             .addOnSuccessListener {
                 geofenceCenter = center
                 geofenceRadius = radius
-                Toast.makeText(context, "Perimetro definido (${radius.toInt()} m)", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Perímetro definido (${radius.toInt()} m)", Toast.LENGTH_SHORT).show()
             }
             .addOnFailureListener {
-                Toast.makeText(context, "Erro ao definir perimetro: ${it.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Erro ao definir perímetro: ${it.message}", Toast.LENGTH_LONG).show()
             }
     }
 
@@ -332,10 +349,10 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         geofencingClient.removeGeofences(listOf(GEOFENCE_ID))
             .addOnSuccessListener {
                 geofenceCenter = null
-                Toast.makeText(context, "Perimetro removido", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Perímetro removido", Toast.LENGTH_SHORT).show()
             }
             .addOnFailureListener {
-                Toast.makeText(context, "Erro ao remover perimetro: ${it.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Erro ao remover perímetro: ${it.message}", Toast.LENGTH_LONG).show()
             }
     }
 
@@ -357,7 +374,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         } else if (!hasBackgroundPermission) {
             Toast.makeText(
                 context,
-                "Para usar perimetros, escolha \"Permitir sempre\" nas definições de localização.",
+                "Para usar perímetros, escolha \"Permitir sempre\" nas definições de localização.",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -374,10 +391,14 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         }
     }
 
-    LaunchedEffect(token) {
-        while (true) {
-            synchronizeBookmarks()
-            delay(30_000L)
+    // Sincronização inteligente: entra em standby quando offline (RNF 6 e 10)
+    LaunchedEffect(token, isOnline) {
+        if (isOnline) {
+            bookmarkRepository.syncBookmarks(token, isOnline = true)
+            while (isOnline) {
+                delay(30_000L)
+                bookmarkRepository.syncBookmarks(token, isOnline = true)
+            }
         }
     }
 
@@ -403,6 +424,10 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     LaunchedEffect(currentLocation) {
         currentLocation?.let { newLoc ->
             if (isTripActive) {
+                val currentSpeed = if (newLoc.hasSpeed()) newLoc.speed * MS_TO_KMH else 0.0
+                if (currentSpeed > maxSpeedKmh) {
+                    maxSpeedKmh = currentSpeed
+                }
                 previousLocation?.let { oldLoc ->
                     val distance = oldLoc.distanceTo(newLoc)
                     if (distance >= 2.0f && newLoc.accuracy < 30f) {
@@ -447,7 +472,9 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
         }
     }
 
-    LaunchedEffect(weatherLocationKey) {
+    // Atualização de meteorologia apenas quando online (Standby offline - RNF 6 e 10)
+    LaunchedEffect(weatherLocationKey, isOnline) {
+        if (!isOnline) return@LaunchedEffect
         val location = currentLocation ?: run {
             temperatureC = null
             weatherCode = null
@@ -463,7 +490,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 }
             }
         } catch (_: Exception) {
-            // Weather is optional and should not affect map or trip tracking.
+            // Meteorologia é opcional
         }
     }
 
@@ -508,156 +535,184 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
 
         val geofenceActive = geofenceCenter != null
 
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box {
-                FloatingActionButton(
-                    onClick = { showLocationMenu = true },
-                ) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "Mais opções")
-                }
-
-                DropdownMenu(
-                    expanded = showLocationMenu,
-                    onDismissRequest = { showLocationMenu = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(if (geofenceActive) "Redefinir / Remover Geofence" else "Definir Perímetro (Geofence)") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = if (geofenceActive) Icons.Default.EditLocationAlt else Icons.Default.AddLocationAlt,
-                                contentDescription = null
-                            )
-                        },
-                        onClick = {
-                            showLocationMenu = false
-                            when {
-                                !hasPermission -> Toast.makeText(
-                                    context, "Permita primeiro o acesso à localização.", Toast.LENGTH_SHORT
-                                ).show()
-
-                                currentLocation == null -> Toast.makeText(
-                                    context, "A aguardar localização GPS...", Toast.LENGTH_SHORT
-                                ).show()
-
-                                else -> {
-                                    dialogRadius = if (geofenceActive) geofenceRadius else DEFAULT_GEOFENCE_RADIUS_M
-                                    showGeofenceDialog = true
-                                }
-                            }
-                        }
-                    )
-
-                    HorizontalDivider()
-
-                    DropdownMenuItem(
-                        text = { Text("Comunicar Perigo / Ocorrência") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.AddLocationAlt,
-                                contentDescription = null
-                            )
-                        },
-                        onClick = {
-                            showLocationMenu = false
-                            currentLocation?.let {
-                                reportLocation = LatLng(it.latitude, it.longitude)
-                                reportError = null
-                            }
-                        }
-                    )
-
-                    HorizontalDivider()
-
-                    DropdownMenuItem(
-                        text = { Text("Histórico de viagens") },
-                        leadingIcon = {
-                            Icon(Icons.Default.History, contentDescription = null)
-                        },
-                        onClick = {
-                            showLocationMenu = false
-                            showTripHistory = true
-                        }
-                    )
-
-                    DropdownMenuItem(
-                        text = { Text("Perfil") },
-                        leadingIcon = {
-                            Icon(Icons.Default.Person, contentDescription = null)
-                        },
-                        onClick = {
-                            showLocationMenu = false
-                            showProfileDialog = true
-                        }
-                    )
-
-                    DropdownMenuItem(
-                        text = { Text("Reiniciar viagem") },
-                        leadingIcon = {
-                            Icon(Icons.Default.RestartAlt, contentDescription = null)
-                        },
-                        onClick = {
-                            showLocationMenu = false
-                            if (elapsedTimeMs > 0L || totalDistanceMeters > 0f) {
-                                tripHistory.add(
-                                    TripHistoryEntry(tripStartTimeMs, totalDistanceMeters, elapsedTimeMs)
-                                )
-                                saveTripHistory(context, tripHistory)
-                            }
-                            totalDistanceMeters = 0f
-                            tripStartTimeMs = System.currentTimeMillis()
-                            elapsedTimeMs = 0L
-                            previousLocation = currentLocation
-                        }
-                    )
-                }
-            }
-
-            FloatingActionButton(
-                onClick = {
-                    followUser = true
-                    currentLocation?.let {
-                        scope.launch {
-                            cameraPositionState.animate(
-                                CameraUpdateFactory.newLatLngZoom(
-                                    LatLng(it.latitude, it.longitude), DEFAULT_ZOOM
-                                )
-                            )
-                        }
-                    }
-                }
-            ) {
-                Icon(Icons.Default.MyLocation, contentDescription = "Centrar na minha posição")
-            }
-
-            if (showProfileDialog) {
-                ProfileDialog(
-                    token = token,
-                    onDismiss = { showProfileDialog = false },
-                    onLogout = {
-                        showProfileDialog = false
-                        performLogout()
-                    }
-                )
-            }
-        }
-
-        WeatherCard(
-            temperatureC = temperatureC,
-            weatherCode = weatherCode,
+        Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
+                .fillMaxWidth()
                 .statusBarsPadding()
-                .widthIn(max = 400.dp)
-                .padding(top = 88.dp, start = 16.dp, end = 16.dp)
-        )
+        ) {
+            // Banner indicador de Modo Offline / Standby (RNF 1, 5, 6 e 10)
+            AnimatedVisibility(
+                visible = !isOnline,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    shadowElevation = 4.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.WifiOff,
+                            contentDescription = "Offline",
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Modo Offline — Sincronização em pausa",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box {
+                    FloatingActionButton(
+                        onClick = { showLocationMenu = true },
+                    ) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Mais opções")
+                    }
+
+                    DropdownMenu(
+                        expanded = showLocationMenu,
+                        onDismissRequest = { showLocationMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(if (geofenceActive) "Redefinir / Remover Geofence" else "Definir Perímetro (Geofence)") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (geofenceActive) Icons.Default.EditLocationAlt else Icons.Default.AddLocationAlt,
+                                    contentDescription = null
+                                )
+                            },
+                            onClick = {
+                                showLocationMenu = false
+                                when {
+                                    !hasPermission -> Toast.makeText(
+                                        context, "Permita primeiro o acesso à localização.", Toast.LENGTH_SHORT
+                                    ).show()
+
+                                    currentLocation == null -> Toast.makeText(
+                                        context, "A aguardar localização GPS...", Toast.LENGTH_SHORT
+                                    ).show()
+
+                                    else -> {
+                                        dialogRadius = if (geofenceActive) geofenceRadius else DEFAULT_GEOFENCE_RADIUS_M
+                                        showGeofenceDialog = true
+                                    }
+                                }
+                            }
+                        )
+
+                        HorizontalDivider()
+
+                        DropdownMenuItem(
+                            text = { Text("Comunicar Perigo / Ocorrência") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.AddLocationAlt,
+                                    contentDescription = null
+                                )
+                            },
+                            onClick = {
+                                showLocationMenu = false
+                                currentLocation?.let {
+                                    reportLocation = LatLng(it.latitude, it.longitude)
+                                    reportError = null
+                                }
+                            }
+                        )
+
+                        HorizontalDivider()
+
+                        DropdownMenuItem(
+                            text = { Text("Histórico de viagens") },
+                            leadingIcon = {
+                                Icon(Icons.Default.History, contentDescription = null)
+                            },
+                            onClick = {
+                                showLocationMenu = false
+                                showTripHistory = true
+                            }
+                        )
+
+                        DropdownMenuItem(
+                            text = { Text("Perfil") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Person, contentDescription = null)
+                            },
+                            onClick = {
+                                showLocationMenu = false
+                                showProfileDialog = true
+                            }
+                        )
+
+                        DropdownMenuItem(
+                            text = { Text("Reiniciar / Guardar viagem") },
+                            leadingIcon = {
+                                Icon(Icons.Default.RestartAlt, contentDescription = null)
+                            },
+                            onClick = {
+                                showLocationMenu = false
+                                finishAndSaveTrip()
+                            }
+                        )
+                    }
+                }
+
+                FloatingActionButton(
+                    onClick = {
+                        followUser = true
+                        currentLocation?.let {
+                            scope.launch {
+                                cameraPositionState.animate(
+                                    CameraUpdateFactory.newLatLngZoom(
+                                        LatLng(it.latitude, it.longitude), DEFAULT_ZOOM
+                                    )
+                                )
+                            }
+                        }
+                    }
+                ) {
+                    Icon(Icons.Default.MyLocation, contentDescription = "Centrar na minha posição")
+                }
+
+                if (showProfileDialog) {
+                    ProfileDialog(
+                        token = token,
+                        onDismiss = { showProfileDialog = false },
+                        onLogout = {
+                            showProfileDialog = false
+                            performLogout()
+                        }
+                    )
+                }
+            }
+
+            WeatherCard(
+                temperatureC = temperatureC,
+                weatherCode = weatherCode,
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .widthIn(max = 400.dp)
+                    .padding(horizontal = 16.dp)
+            )
+        }
 
         ElevatedCard(
             modifier = Modifier
@@ -703,10 +758,17 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                         if (isTripActive) {
                             isTripActive = false
                         } else {
-                            tripStartTimeMs = System.currentTimeMillis() - elapsedTimeMs
+                            if (tripStartTimeMs == 0L) {
+                                tripStartTimeMs = System.currentTimeMillis()
+                            } else {
+                                tripStartTimeMs = System.currentTimeMillis() - elapsedTimeMs
+                            }
                             isTripActive = true
                         }
                     },
+                    onFinishTrip = {
+                        finishAndSaveTrip()
+                    }
                 )
             }
         }
@@ -741,6 +803,14 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
     if (showTripHistory) {
         TripHistoryDialog(
             entries = tripHistory.asReversed(),
+            onDeleteEntry = { entryToDelete ->
+                tripHistory.remove(entryToDelete)
+                saveTripHistory(context, tripHistory)
+            },
+            onClearAll = {
+                tripHistory.clear()
+                saveTripHistory(context, tripHistory)
+            },
             onDismiss = { showTripHistory = false }
         )
     }
@@ -752,7 +822,7 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Escolha o tipo de ocorrência para este local.")
-                    listOf("ACCIDENT" to "Acidente", "DANGER" to "Perigo", "ROAD_CLOSED" to "Estrada fechada")
+                    listOf("Acidente" to "Acidente", "Perigo" to "Perigo", "Estrada Fechada" to "Estrada Fechada")
                         .forEach { (value, label) ->
                             FilterChip(
                                 selected = reportType == value,
@@ -785,43 +855,77 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                                 longitude = location.longitude
                             )
                             val localId = -System.currentTimeMillis()
-                            bookmarkDao.insert(
-                                BookmarkEntity(
-                                    id = localId,
-                                    type = request.type,
-                                    description = request.description,
-                                    latitude = request.latitude,
-                                    longitude = request.longitude,
-                                    createdAtMs = System.currentTimeMillis()
+
+                            if (!isOnline) {
+                                bookmarkDao.insert(
+                                    BookmarkEntity(
+                                        id = localId,
+                                        type = request.type,
+                                        description = request.description,
+                                        latitude = request.latitude,
+                                        longitude = request.longitude,
+                                        createdAtMs = System.currentTimeMillis(),
+                                        syncState = BookmarkEntity.SYNC_STATE_PENDING_INSERT
+                                    )
                                 )
-                            )
-                            try {
-                                val response = ApiClient.api.createBookmark(
-                                    authorization = "Bearer $token",
-                                    request
-                                )
-                                if (response.isSuccessful) {
-                                    response.body()?.let { newBookmark ->
-                                        bookmarkDao.deleteById(localId)
-                                        bookmarkDao.insert(newBookmark.toEntity())
-                                    }
-                                    reportDescription = ""
-                                    reportLocation = null
-                                } else {
-                                    reportDescription = ""
-                                    reportLocation = null
-                                    Toast.makeText(
-                                        context,
-                                        "Ocorrência guardada localmente; será sincronizada quando houver ligação.",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                            } catch (_: Exception) {
                                 reportDescription = ""
                                 reportLocation = null
                                 Toast.makeText(
                                     context,
-                                    "Ocorrência guardada localmente; será sincronizada quando houver ligação.",
+                                    "Ocorrência guardada localmente. Será sincronizada assim que tiver ligação.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                reportSubmitting = false
+                                return@launch
+                            }
+
+                            try {
+                                val response = bookmarkRepository.createBookmark(token, request)
+                                if (response.isSuccessful) {
+                                    response.body()?.let { newBookmark ->
+                                        val validCreatedAt = if (newBookmark.createdAtMs > 0) newBookmark.createdAtMs else System.currentTimeMillis()
+                                        bookmarkDao.insert(newBookmark.copy(createdAtMs = validCreatedAt).toEntity(BookmarkEntity.SYNC_STATE_SYNCED))
+                                    }
+                                    Toast.makeText(context, "Ocorrência comunicada com sucesso!", Toast.LENGTH_SHORT).show()
+                                    reportDescription = ""
+                                    reportLocation = null
+                                } else {
+                                    bookmarkDao.insert(
+                                        BookmarkEntity(
+                                            id = localId,
+                                            type = request.type,
+                                            description = request.description,
+                                            latitude = request.latitude,
+                                            longitude = request.longitude,
+                                            createdAtMs = System.currentTimeMillis(),
+                                            syncState = BookmarkEntity.SYNC_STATE_PENDING_INSERT
+                                        )
+                                    )
+                                    reportDescription = ""
+                                    reportLocation = null
+                                    Toast.makeText(
+                                        context,
+                                        "Ocorrência guardada localmente. Será sincronizada em segundo plano.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            } catch (_: Exception) {
+                                bookmarkDao.insert(
+                                    BookmarkEntity(
+                                        id = localId,
+                                        type = request.type,
+                                        description = request.description,
+                                        latitude = request.latitude,
+                                        longitude = request.longitude,
+                                        createdAtMs = System.currentTimeMillis(),
+                                        syncState = BookmarkEntity.SYNC_STATE_PENDING_INSERT
+                                    )
+                                )
+                                reportDescription = ""
+                                reportLocation = null
+                                Toast.makeText(
+                                    context,
+                                    "Ocorrência guardada localmente. Será sincronizada assim que tiver ligação.",
                                     Toast.LENGTH_LONG
                                 ).show()
                             } finally {
@@ -861,8 +965,15 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                     TextButton(
                         onClick = {
                             scope.launch {
+                                if (!isOnline) {
+                                    val updatedBookmark = bookmark.copy(confirmations = bookmark.confirmations + 1)
+                                    bookmarkDao.insert(updatedBookmark.toEntity())
+                                    selectedBookmark = null
+                                    Toast.makeText(context, "Confirmação registada localmente.", Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
                                 try {
-                                    val response = ApiClient.api.confirmBookmark("Bearer $token", bookmark.id)
+                                    val response = bookmarkRepository.confirmBookmark(token, bookmark.id)
                                     if (response.isSuccessful) {
                                         val updatedBookmark = bookmark.copy(confirmations = bookmark.confirmations + 1)
                                         bookmarkDao.insert(updatedBookmark.toEntity())
@@ -871,7 +982,10 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                                         bookmarkActionError = response.body()?.message ?: "Não foi possível confirmar."
                                     }
                                 } catch (_: Exception) {
-                                    bookmarkActionError = "Sem ligação ao servidor."
+                                    val updatedBookmark = bookmark.copy(confirmations = bookmark.confirmations + 1)
+                                    bookmarkDao.insert(updatedBookmark.toEntity())
+                                    selectedBookmark = null
+                                    Toast.makeText(context, "Confirmação registada localmente.", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -879,16 +993,22 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                     TextButton(
                         onClick = {
                             scope.launch {
+                                if (!isOnline) {
+                                    selectedBookmark = null
+                                    Toast.makeText(context, "Sinalização registada localmente.", Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
                                 try {
-                                    val response = ApiClient.api.reportBookmark(
-                                        authorization = "Bearer $token",
+                                    val response = bookmarkRepository.reportBookmark(
+                                        token = token,
                                         id = bookmark.id,
                                         req = BookmarkReportRequest("Informação incorreta")
                                     )
                                     if (response.isSuccessful) selectedBookmark = null
                                     else bookmarkActionError = response.body()?.message ?: "Não foi possível sinalizar."
                                 } catch (_: Exception) {
-                                    bookmarkActionError = "Sem ligação ao servidor."
+                                    selectedBookmark = null
+                                    Toast.makeText(context, "Sinalização registada localmente.", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -899,21 +1019,33 @@ fun MenuInicial(token: String, onLogout: () -> Unit = {}) {
                 TextButton(
                     onClick = {
                         scope.launch {
-                                if (bookmark.id < 0) {
-                                    bookmarkDao.deleteById(bookmark.id)
-                                    selectedBookmark = null
-                                    return@launch
-                                }
+                            if (bookmark.id < 0) {
+                                bookmarkDao.deleteById(bookmark.id)
+                                selectedBookmark = null
+                                Toast.makeText(context, "Ocorrência local removida.", Toast.LENGTH_SHORT).show()
+                                return@launch
+                            }
+
+                            if (!isOnline) {
+                                bookmarkRepository.markForPendingDelete(bookmark.id)
+                                selectedBookmark = null
+                                Toast.makeText(context, "Remoção agendada para quando houver ligação.", Toast.LENGTH_SHORT).show()
+                                return@launch
+                            }
+
                             try {
-                                val response = ApiClient.api.deleteBookmark("Bearer $token", bookmark.id)
-                                if (response.isSuccessful) {
+                                val response = bookmarkRepository.deleteBookmark(token, bookmark.id)
+                                if (response.isSuccessful || response.code() == 404) {
                                     bookmarkDao.deleteById(bookmark.id)
                                     selectedBookmark = null
+                                    Toast.makeText(context, "Ocorrência removida.", Toast.LENGTH_SHORT).show()
                                 } else {
                                     bookmarkActionError = response.body()?.message ?: "Só pode remover as suas ocorrências."
                                 }
                             } catch (_: Exception) {
-                                bookmarkActionError = "Sem ligação ao servidor."
+                                bookmarkRepository.markForPendingDelete(bookmark.id)
+                                selectedBookmark = null
+                                Toast.makeText(context, "Remoção agendada para quando houver ligação.", Toast.LENGTH_SHORT).show()
                             }
                         }
                     }
@@ -949,43 +1081,165 @@ private fun WeatherCard(
     }
 }
 
+ // Diálogo para consulta do histórico de deslocações e respetivos detalhes.
 @Composable
 private fun TripHistoryDialog(
     entries: List<TripHistoryEntry>,
+    onDeleteEntry: (TripHistoryEntry) -> Unit,
+    onClearAll: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Histórico de viagens") },
-        text = {
-            if (entries.isEmpty()) {
-                Text("Ainda não existem viagens guardadas.")
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    entries.forEach { entry ->
-                        Column {
-                            Text(
-                                text = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
-                                    .format(Date(entry.startedAtMs)),
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "${formatDistanceValue(entry.distanceMeters)} " +
-                                        "${formatDistanceUnit(entry.distanceMeters)} · " +
-                                        formatDuration(entry.durationMs),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+    var selectedEntry by remember { mutableStateOf<TripHistoryEntry?>(null) }
+
+    if (selectedEntry != null) {
+        TripDetailDialog(
+            entry = selectedEntry!!,
+            onDismiss = { selectedEntry = null }
+        )
+    } else {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Histórico de viagens")
+                    if (entries.isNotEmpty()) {
+                        IconButton(onClick = onClearAll) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteSweep,
+                                contentDescription = "Limpar histórico",
+                                tint = MaterialTheme.colorScheme.error
                             )
                         }
                     }
                 }
+            },
+            text = {
+                if (entries.isEmpty()) {
+                    Text("Ainda não existem viagens guardadas.")
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 350.dp)
+                    ) {
+                        items(entries, key = { it.id }) { entry ->
+                            OutlinedCard(
+                                onClick = { selectedEntry = entry },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = SimpleDateFormat("dd/MM/yyyy · HH:mm", Locale.getDefault())
+                                                .format(Date(entry.startedAtMs)),
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "${formatDistanceValue(entry.distanceMeters)} ${formatDistanceUnit(entry.distanceMeters)} · ${formatDuration(entry.durationMs)}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = "Vel. Média: %.1f km/h".format(entry.averageSpeedKmh),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    IconButton(onClick = { onDeleteEntry(entry) }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Apagar viagem",
+                                            tint = MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onDismiss) { Text("Fechar") }
+            }
+        )
+    }
+}
+
+ // Diálogo modal para consultar em detalhe as métricas de uma deslocação específica.
+@Composable
+private fun TripDetailDialog(
+    entry: TripHistoryEntry,
+    onDismiss: () -> Unit
+) {
+    val dateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault())
+    val startDateStr = dateFormat.format(Date(entry.startedAtMs))
+    val endDateStr = dateFormat.format(Date(entry.endedAtMs))
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.Route, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Text("Detalhes da Viagem")
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                DetailRow(label = "Início", value = startDateStr)
+                DetailRow(label = "Fim", value = endDateStr)
+                HorizontalDivider()
+                DetailRow(
+                    label = "Distância Total",
+                    value = "${formatDistanceValue(entry.distanceMeters)} ${formatDistanceUnit(entry.distanceMeters)}"
+                )
+                DetailRow(
+                    label = "Duração Total",
+                    value = formatDuration(entry.durationMs)
+                )
+                DetailRow(
+                    label = "Velocidade Média",
+                    value = "%.1f km/h".format(entry.averageSpeedKmh)
+                )
+                if (entry.maxSpeedKmh > 0) {
+                    DetailRow(
+                        label = "Velocidade Máxima",
+                        value = "%.1f km/h".format(entry.maxSpeedKmh)
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Fechar") }
+            TextButton(onClick = onDismiss) { Text("Voltar") }
         }
     )
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+    }
 }
 
 private fun weatherPresentation(code: Int?): Pair<ImageVector, String> = when (code) {
@@ -1059,9 +1313,9 @@ private fun GeofenceDialog(
 }
 
 private fun bookmarkHue(type: String): Float = when (type) {
-    "ACCIDENT" -> BitmapDescriptorFactory.HUE_RED
-    "DANGER" -> BitmapDescriptorFactory.HUE_ORANGE
-    "ROAD_CLOSED" -> BitmapDescriptorFactory.HUE_VIOLET
+    "Acidente", "ACCIDENT" -> BitmapDescriptorFactory.HUE_RED
+    "Perigo", "DANGER" -> BitmapDescriptorFactory.HUE_ORANGE
+    "Estrada Fechada", "Estrada fechada", "ROAD_CLOSED" -> BitmapDescriptorFactory.HUE_VIOLET
     else -> BitmapDescriptorFactory.HUE_AZURE
 }
 
@@ -1071,7 +1325,8 @@ private fun LocationInfoPanel(
     totalDistanceMeters: Float,
     elapsedTimeMs: Long,
     isTripActive: Boolean,
-    onToggleTrip: () -> Unit
+    onToggleTrip: () -> Unit,
+    onFinishTrip: () -> Unit
 ) {
     val speedKmh = if (location.hasSpeed()) location.speed * MS_TO_KMH else 0.0
 
@@ -1126,6 +1381,16 @@ private fun LocationInfoPanel(
                         contentDescription = if (isTripActive) "Pausar viagem" else "Iniciar viagem",
                         tint = if (isTripActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
                     )
+                }
+
+                if (isTripActive || elapsedTimeMs > 0L) {
+                    IconButton(onClick = onFinishTrip) {
+                        Icon(
+                            imageVector = Icons.Default.Stop,
+                            contentDescription = "Finalizar e Guardar Viagem",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
 
@@ -1242,7 +1507,6 @@ private fun PermissionPanel(
     }
 }
 
-//necessário para a mudança do brilho, é necessário uma referencia para a activity e a janela.
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()

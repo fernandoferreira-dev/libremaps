@@ -125,6 +125,7 @@ fun Login(vm: AuthViewModel = viewModel(), onLoggedIn: (String) -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+
             // Header / Logo
             Surface(
                 modifier = Modifier.size(80.dp),
